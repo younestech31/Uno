@@ -808,12 +808,23 @@ export function createCardClashServer(
           return;
         }
 
+        const companionIds = parsed.data?.companionPlayerIds ?? [];
+        for (const compId of companionIds) {
+          if (typeof compId === 'string' && compId.trim().length > 0) {
+            clearGraceTimer(compId);
+            await roomManager.leaveRoom(compId, parsed.data?.roomCode);
+          }
+        }
+
+        clearGraceTimer(identity.playerId);
         const result = await roomManager.leaveRoom(
           identity.playerId,
           parsed.data?.roomCode
         );
         if (!result.ok) {
-          sendError(socket, ack, result.error);
+          if (typeof ack === 'function') {
+            ack({ ok: true, data: { roomCode: parsed.data?.roomCode ?? '' } });
+          }
           return;
         }
 

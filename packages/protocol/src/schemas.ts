@@ -57,6 +57,7 @@ export type RoomSpectateIntent = z.infer<typeof RoomSpectateIntentSchema>;
 export const RoomLeaveIntentSchema = z
   .object({
     roomCode: RoomCodeSchema.optional(),
+    companionPlayerIds: z.array(z.string()).optional(),
   })
   .strict()
   .optional();

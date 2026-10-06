@@ -1,6 +1,6 @@
 {
-  "summary": "Revised implementation plan adding 1v1 mirrored fanned card-back hand for the opponent, adaptive multi-player fanned opponent hands for 3+ players, and true standalone PWA support without the Chrome navigation bar.",
-  "updatedAt": "2026-10-06T22:09:30.351089869Z",
+  "summary": "Implementation plan to fix room leaving and serverless synchronization bugs in both lobby and mid-game states, ensuring immediate client exit and server room cleanup when no active human players remain.",
+  "updatedAt": "2026-10-06T22:32:40.419173674Z",
   "requestFeedback": true,
   "userFacing": true
 }

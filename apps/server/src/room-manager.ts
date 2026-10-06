@@ -504,12 +504,24 @@ export class RoomManager {
 
     const memberExists = snapshot.players.some((p) => p.id === playerId);
     if (!memberExists) {
-      return err('NOT_IN_ROOM', `Player is not in room "${roomCode}"`);
+      const hasActiveHumans = snapshot.players.some((p) => p.connected && !p.isBot);
+      if (!hasActiveHumans) {
+        for (const p of snapshot.players) {
+          await this.store.setPlayerRoom(p.id, null);
+        }
+        await this.store.deleteRoomSnapshot(roomCode);
+        return { ok: true, data: { roomCode, room: null } };
+      }
+      return { ok: true, data: { roomCode, room: toPublicRoomState(snapshot) } };
     }
 
     if (snapshot.status === 'LOBBY') {
       const remaining = snapshot.players.filter((p) => p.id !== playerId);
-      if (remaining.length === 0) {
+      const hasConnectedHuman = remaining.some((p) => p.connected && !p.isBot);
+      if (remaining.length === 0 || !hasConnectedHuman) {
+        for (const p of remaining) {
+          await this.store.setPlayerRoom(p.id, null);
+        }
         await this.store.deleteRoomSnapshot(roomCode);
         return { ok: true, data: { roomCode, room: null } };
       }
@@ -535,9 +547,24 @@ export class RoomManager {
 
     const updatedPlayers = snapshot.players.map((p) =>
       p.id === playerId
-        ? { ...p, connected: false, disconnectedAt: now }
+        ? { ...p, connected: false, isBot: true, disconnectedAt: now }
         : p
     );
+
+    const hasRemainingHuman = updatedPlayers.some((p) => p.connected && !p.isBot);
+    if (!hasRemainingHuman) {
+      for (const p of snapshot.players) {
+        await this.store.setPlayerRoom(p.id, null);
+      }
+      await this.store.deleteRoomSnapshot(roomCode);
+      return { ok: true, data: { roomCode, room: null } };
+    }
+
+    const nextHostId =
+      snapshot.hostPlayerId === playerId
+        ? (updatedPlayers.find((p) => p.connected && !p.isBot)?.id ?? snapshot.hostPlayerId)
+        : snapshot.hostPlayerId;
+
     const updatedGameState = snapshot.gameState
       ? {
           ...snapshot.gameState,
@@ -549,6 +576,7 @@ export class RoomManager {
 
     const nextSnapshot: RoomSnapshot = {
       ...snapshot,
+      hostPlayerId: nextHostId,
       players: updatedPlayers,
       gameState: updatedGameState,
       updatedAt: now,

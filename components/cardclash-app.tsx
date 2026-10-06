@@ -458,22 +458,67 @@ type SocketCallback = (data: any) => void;
 class ServerlessFallbackSocket {
   private listeners = new Map<string, Set<SocketCallback>>();
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
+  private broadcastHandler: ((e: Event) => void) | null = null;
   public connected = false;
+  public readonly isServerlessFallback = true;
+
+  public static clearActiveRoomStorage(roomCode?: string | null): void {
+    if (typeof window === 'undefined') return;
+    const active = roomCode || window.sessionStorage.getItem('cardclash_active_room');
+    window.sessionStorage.removeItem('cardclash_active_room');
+    if (active) {
+      window.sessionStorage.removeItem(`cardclash_snapshot_${active.toUpperCase()}`);
+    }
+  }
 
   constructor(
     private token: string,
-    private playerId: string
+    private playerId: string,
+    private enablePolling = true
   ) {
     this.connected = true;
     setTimeout(() => {
-      this.trigger('connect', null);
+      if (this.connected) {
+        this.trigger('connect', null);
+      }
     }, 50);
 
-    // Dynamic background room sync loop (polls every 1.5 seconds)
     if (typeof window !== 'undefined') {
-      this.pollingInterval = setInterval(() => {
-        void this.pollSync();
-      }, 1500);
+      this.broadcastHandler = (evt: Event) => {
+        if (!this.connected) return;
+        const customEvt = evt as CustomEvent<{
+          room: PublicRoomState;
+          viewsByPlayer: Record<string, PlayerView> | null;
+          events: GameEvent[] | null;
+          sourcePlayerId: string;
+        }>;
+        const detail = customEvt.detail;
+        if (!detail || detail.sourcePlayerId === this.playerId) return;
+        const activeRoom = window.sessionStorage.getItem('cardclash_active_room');
+        if (!activeRoom || detail.room?.roomCode !== activeRoom) return;
+
+        if (detail.viewsByPlayer && detail.viewsByPlayer[this.playerId]) {
+          this.trigger(SOCKET_EVENTS.GAME_VIEW, {
+            roomCode: detail.room.roomCode,
+            view: detail.viewsByPlayer[this.playerId],
+            turnDeadlineAt: detail.room.turnDeadlineAt ?? null,
+          });
+        }
+        if (detail.room) {
+          this.trigger(SOCKET_EVENTS.ROOM_STATE, detail.room);
+        }
+        if (detail.events) {
+          this.trigger(SOCKET_EVENTS.GAME_EVENTS, { events: detail.events });
+        }
+      };
+      window.addEventListener('cardclash_sync_broadcast', this.broadcastHandler);
+
+      // Dynamic background room sync loop (polls every 1.5 seconds on primary seat)
+      if (this.enablePolling) {
+        this.pollingInterval = setInterval(() => {
+          void this.pollSync();
+        }, 1500);
+      }
     }
   }
 
@@ -505,6 +550,11 @@ class ServerlessFallbackSocket {
     this.connected = false;
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+    if (typeof window !== 'undefined' && this.broadcastHandler) {
+      window.removeEventListener('cardclash_sync_broadcast', this.broadcastHandler);
+      this.broadcastHandler = null;
     }
     this.trigger('disconnect', null);
   }
@@ -531,26 +581,28 @@ class ServerlessFallbackSocket {
     }
   }
 
-  private getSnapshotToken(): string | null {
+  private getSnapshotToken(explicitRoomCode?: string | null): string | null {
     if (typeof window === 'undefined') return null;
-    const roomCode = window.sessionStorage.getItem('cardclash_active_room');
+    const roomCode =
+      explicitRoomCode || window.sessionStorage.getItem('cardclash_active_room');
     if (!roomCode) return null;
-    return window.sessionStorage.getItem(`cardclash_snapshot_${roomCode}`);
+    return window.sessionStorage.getItem(`cardclash_snapshot_${roomCode.toUpperCase()}`);
   }
 
   private saveSnapshotToken(roomCode: string, token: string): void {
     if (typeof window === 'undefined') return;
-    window.sessionStorage.setItem('cardclash_active_room', roomCode);
-    window.sessionStorage.setItem(`cardclash_snapshot_${roomCode}`, token);
+    const normalized = roomCode.toUpperCase();
+    window.sessionStorage.setItem('cardclash_active_room', normalized);
+    window.sessionStorage.setItem(`cardclash_snapshot_${normalized}`, token);
   }
 
   private async pollSync() {
-    if (typeof window === 'undefined') return;
+    if (!this.connected || typeof window === 'undefined') return;
     const roomCode = window.sessionStorage.getItem('cardclash_active_room');
     if (!roomCode) return;
 
     try {
-      const token = this.getSnapshotToken();
+      const token = this.getSnapshotToken(roomCode);
       const res = await fetch('/api/rpc', {
         method: 'POST',
         headers: {
@@ -564,15 +616,40 @@ class ServerlessFallbackSocket {
         }),
       });
 
+      // Abort if socket disconnected or user already left/changed room while fetch was in flight
+      if (
+        !this.connected ||
+        window.sessionStorage.getItem('cardclash_active_room') !== roomCode
+      ) {
+        return;
+      }
+
+      if (res.status === 404 || res.status === 403) {
+        ServerlessFallbackSocket.clearActiveRoomStorage(roomCode);
+        return;
+      }
+
       if (res.ok) {
         const envelope = await res.json();
+        if (
+          !this.connected ||
+          window.sessionStorage.getItem('cardclash_active_room') !== roomCode
+        ) {
+          return;
+        }
         if (envelope.ok && envelope.data) {
           if (envelope.snapshotToken) {
             this.saveSnapshotToken(roomCode, envelope.snapshotToken);
           }
-          this.trigger(SOCKET_EVENTS.ROOM_STATE, envelope.data.room);
           if (envelope.data.view) {
-            this.trigger(SOCKET_EVENTS.GAME_VIEW, { view: envelope.data.view });
+            this.trigger(SOCKET_EVENTS.GAME_VIEW, {
+              roomCode,
+              view: envelope.data.view,
+              turnDeadlineAt: envelope.data.turnDeadlineAt ?? null,
+            });
+          }
+          if (envelope.data.room) {
+            this.trigger(SOCKET_EVENTS.ROOM_STATE, envelope.data.room);
           }
         }
       }
@@ -610,7 +687,7 @@ class ServerlessFallbackSocket {
         roomCode = payload.roomCode;
       } else if (event === SOCKET_EVENTS.ROOM_LEAVE) {
         rpcType = 'room:leave';
-        roomCode = payload.roomCode;
+        roomCode = payload?.roomCode;
       } else if (event === SOCKET_EVENTS.GAME_ACTION) {
         rpcType = 'game:action';
         roomCode = payload.roomCode;
@@ -624,8 +701,18 @@ class ServerlessFallbackSocket {
         return;
       }
 
-      const activeRoom = roomCode || (typeof window !== 'undefined' ? window.sessionStorage.getItem('cardclash_active_room') : null);
-      const snapToken = activeRoom ? this.getSnapshotToken() : null;
+      const activeRoom = (
+        roomCode ||
+        (typeof window !== 'undefined'
+          ? window.sessionStorage.getItem('cardclash_active_room')
+          : null) ||
+        ''
+      ).toUpperCase();
+      const snapToken = activeRoom ? this.getSnapshotToken(activeRoom) : null;
+
+      if (event === SOCKET_EVENTS.ROOM_LEAVE) {
+        ServerlessFallbackSocket.clearActiveRoomStorage(activeRoom);
+      }
 
       const res = await fetch('/api/rpc', {
         method: 'POST',
@@ -641,6 +728,13 @@ class ServerlessFallbackSocket {
         }),
       });
 
+      if (event === SOCKET_EVENTS.ROOM_LEAVE) {
+        if (ack) {
+          ack({ ok: true, data: { roomCode: activeRoom, room: null } });
+        }
+        return;
+      }
+
       if (!res.ok) {
         const errPayload = await res.json().catch(() => ({}));
         const errObj = { code: 'RPC_ERROR', message: errPayload.error?.message || errPayload.error || 'Serverless action failed' };
@@ -650,21 +744,43 @@ class ServerlessFallbackSocket {
       }
 
       const envelope = await res.json();
+
+      // If this was an in-room mutation and the user left the room while the request was in flight, discard
+      const isRoomEntryEvent =
+        event === SOCKET_EVENTS.ROOM_CREATE ||
+        event === SOCKET_EVENTS.ROOM_JOIN ||
+        event === SOCKET_EVENTS.ROOM_SPECTATE;
+      if (
+        !isRoomEntryEvent &&
+        typeof window !== 'undefined' &&
+        window.sessionStorage.getItem('cardclash_active_room') !== activeRoom
+      ) {
+        return;
+      }
+
       if (envelope.ok && envelope.data) {
         const data = envelope.data;
-        const currentRoomCode = data.room?.roomCode || activeRoom;
+        const currentRoomCode = (data.room?.roomCode || activeRoom || '').toUpperCase();
         if (currentRoomCode && envelope.snapshotToken) {
           this.saveSnapshotToken(currentRoomCode, envelope.snapshotToken);
         }
 
-        if (data.room) {
-          this.trigger(SOCKET_EVENTS.ROOM_STATE, data.room);
-        }
         if (data.view) {
-          this.trigger(SOCKET_EVENTS.GAME_VIEW, { view: data.view });
+          this.trigger(SOCKET_EVENTS.GAME_VIEW, {
+            roomCode: currentRoomCode,
+            view: data.view,
+            turnDeadlineAt: data.turnDeadlineAt ?? data.room?.turnDeadlineAt ?? null,
+          });
         }
         if (data.viewsByPlayer && data.viewsByPlayer[this.playerId]) {
-          this.trigger(SOCKET_EVENTS.GAME_VIEW, { view: data.viewsByPlayer[this.playerId] });
+          this.trigger(SOCKET_EVENTS.GAME_VIEW, {
+            roomCode: currentRoomCode,
+            view: data.viewsByPlayer[this.playerId],
+            turnDeadlineAt: data.room?.turnDeadlineAt ?? null,
+          });
+        }
+        if (data.room) {
+          this.trigger(SOCKET_EVENTS.ROOM_STATE, data.room);
         }
         if (data.events) {
           this.trigger(SOCKET_EVENTS.GAME_EVENTS, { events: data.events });
@@ -696,7 +812,7 @@ class ServerlessFallbackSocket {
   }
 }
 
-function createGameSocket(creds: SessionCredentials): any {
+function createGameSocket(creds: SessionCredentials, enablePolling = true): any {
   const socketUrl = getBackendUrl();
   const isVercelStandalone =
     typeof window !== 'undefined' &&
@@ -708,7 +824,7 @@ function createGameSocket(creds: SessionCredentials): any {
 
   if (isVercelStandalone) {
     console.log('[CardClash] Standalone Vercel mode -> using built-in ServerlessFallbackSocket');
-    return new ServerlessFallbackSocket(creds.token, creds.playerId) as any;
+    return new ServerlessFallbackSocket(creds.token, creds.playerId, enablePolling) as any;
   }
 
   return io(socketUrl, {
@@ -758,6 +874,7 @@ export default function CardClashApp() {
   const seatsRef = useRef<Map<string, ManagedSeatClient>>(new Map());
   const seqByPlayerRef = useRef<Record<string, number>>({});
   const roomRef = useRef<PublicRoomState | null>(null);
+  const leavingRoomCodeRef = useRef<string | null>(null);
   const soundEnabledRef = useRef<boolean>(soundEnabled);
 
   useEffect(() => {
@@ -804,6 +921,9 @@ export default function CardClashApp() {
       }
 
       socket.on(SOCKET_EVENTS.ROOM_STATE, (nextRoom: PublicRoomState) => {
+        if (!nextRoom || nextRoom.roomCode === leavingRoomCodeRef.current) {
+          return;
+        }
         if (isPrimary) {
           setRoom(nextRoom);
           if (nextRoom.turnDeadlineAt !== undefined) {
@@ -813,6 +933,12 @@ export default function CardClashApp() {
       });
 
       socket.on(SOCKET_EVENTS.GAME_VIEW, (payload: GameViewBroadcast) => {
+        if (
+          !payload?.view ||
+          (payload.roomCode && payload.roomCode === leavingRoomCodeRef.current)
+        ) {
+          return;
+        }
         seqByPlayerRef.current[creds.playerId] = Math.max(
           seqByPlayerRef.current[creds.playerId] ?? 0,
           payload.view.lastSeq
@@ -822,7 +948,7 @@ export default function CardClashApp() {
         }
 
         if (isPrimary) {
-          // Detect turn transition to primary player -> Trigger 'Your Turn!' sound ping + announcer voice
+          // Detect turn transition to primary player -> Trigger 'Your Turn!' sound ping
           setViewsBySeat((prev) => {
             const prevView = prev[creds.playerId];
             const isMyTurnNow = payload.view.currentPlayerId === creds.playerId;
@@ -932,7 +1058,10 @@ export default function CardClashApp() {
           [creds.playerId]: creds,
         }));
 
-        const socket = createGameSocket(creds);
+        const socket = createGameSocket(creds, true);
+        if ((socket as any).isServerlessFallback) {
+          ServerlessFallbackSocket.clearActiveRoomStorage();
+        }
 
         seatsMap.set(creds.playerId, { credentials: creds, socket });
         registerSocketListeners(socket, creds, true);
@@ -1185,6 +1314,9 @@ export default function CardClashApp() {
     const primary = seatsRef.current.get(primaryCreds.playerId);
     if (!primary) return;
 
+    leavingRoomCodeRef.current = null;
+    ServerlessFallbackSocket.clearActiveRoomStorage();
+
     primary.socket.emit(
       SOCKET_EVENTS.ROOM_CREATE,
       {
@@ -1194,6 +1326,7 @@ export default function CardClashApp() {
       },
       (res: SocketAckResult<{ room: PublicRoomState }>) => {
         if (res.ok) {
+          leavingRoomCodeRef.current = null;
           setRoom(res.data.room);
           setActiveSeatId(primaryCreds.playerId);
         }
@@ -1213,11 +1346,15 @@ export default function CardClashApp() {
     const primary = seatsRef.current.get(primaryCreds.playerId);
     if (!primary) return;
 
+    leavingRoomCodeRef.current = null;
+    ServerlessFallbackSocket.clearActiveRoomStorage();
+
     primary.socket.emit(
       SOCKET_EVENTS.ROOM_JOIN,
       { roomCode: code },
       (res: SocketAckResult<{ room: PublicRoomState }>) => {
         if (res.ok) {
+          leavingRoomCodeRef.current = null;
           setRoom(res.data.room);
           setActiveSeatId(primaryCreds.playerId);
         }
@@ -1252,7 +1389,7 @@ export default function CardClashApp() {
 
     try {
       const creds = await fetchGuestToken(companionName);
-      const compSocket = createGameSocket(creds);
+      const compSocket = createGameSocket(creds, false);
 
       seatsRef.current.set(creds.playerId, {
         credentials: creds,
@@ -1334,36 +1471,52 @@ export default function CardClashApp() {
   };
 
   const handleLeaveRoom = () => {
-    if (!primaryCreds || !room) return;
+    const currentRoomCode = room?.roomCode ?? roomRef.current?.roomCode ?? null;
+    if (currentRoomCode) {
+      leavingRoomCodeRef.current = currentRoomCode;
+    }
+    ServerlessFallbackSocket.clearActiveRoomStorage(currentRoomCode);
 
+    // Immediately clear local UI state so the user returns to the Home screen with zero delay
+    roomRef.current = null;
+    setRoom(null);
+    setViewsBySeat({});
+    setTurnDeadlineAt(null);
+    setLastActionText(null);
+    seqByPlayerRef.current = {};
+    if (primaryCreds) {
+      setActiveSeatId(primaryCreds.playerId);
+    }
+
+    if (!primaryCreds) return;
+
+    const companionPlayerIds: string[] = [];
     for (const [pid, entry] of seatsRef.current.entries()) {
       if (pid !== primaryCreds.playerId) {
-        entry.socket.emit(SOCKET_EVENTS.ROOM_LEAVE, { roomCode: room.roomCode });
+        companionPlayerIds.push(pid);
+        if (currentRoomCode && !(entry.socket as any).isServerlessFallback) {
+          entry.socket.emit(SOCKET_EVENTS.ROOM_LEAVE, { roomCode: currentRoomCode });
+        }
         entry.socket.disconnect();
         seatsRef.current.delete(pid);
       }
     }
-    setSeatCredentialsById(
-      primaryCreds ? { [primaryCreds.playerId]: primaryCreds } : {}
-    );
+    setSeatCredentialsById({ [primaryCreds.playerId]: primaryCreds });
 
     const primary = seatsRef.current.get(primaryCreds.playerId);
-    if (primary) {
+    if (primary && currentRoomCode) {
       primary.socket.emit(
         SOCKET_EVENTS.ROOM_LEAVE,
-        { roomCode: room.roomCode },
+        {
+          roomCode: currentRoomCode,
+          companionPlayerIds,
+        },
         () => {
-          setRoom(null);
-          setViewsBySeat({});
-          setTurnDeadlineAt(null);
-          setActiveSeatId(primaryCreds.playerId);
           void refreshLeaderboardAndHistory();
         }
       );
     } else {
-      setRoom(null);
-      setViewsBySeat({});
-      setTurnDeadlineAt(null);
+      void refreshLeaderboardAndHistory();
     }
   };
 

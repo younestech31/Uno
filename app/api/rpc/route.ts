@@ -37,6 +37,8 @@ function verifyAndDecodeSnapshot(token: string): any {
   }
 }
 
+const closedRoomTimestamps = new Map<string, number>();
+
 export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get('Authorization') ?? '';
@@ -57,25 +59,32 @@ export async function POST(req: NextRequest) {
     const accountRepo = getSharedAccountRepository();
     const manager = new RoomManager(store, accountRepo);
 
+    const type = body.type;
+    const payload = body.payload ?? {};
+
     // Stateless serverless safety: Hydrate room state if snapshotToken is validated
-    let hydratedRoomCode = body.roomCode?.toUpperCase();
-    if (body.snapshotToken) {
+    // Skip re-hydration if this room was already explicitly closed after the snapshot's timestamp
+    if (body.snapshotToken && type !== 'room:create') {
       const decodedSnapshot = verifyAndDecodeSnapshot(body.snapshotToken);
       if (decodedSnapshot && decodedSnapshot.roomCode) {
         const roomCodeStr = decodedSnapshot.roomCode.toUpperCase();
-        hydratedRoomCode = roomCodeStr;
-        const existing = await store.getRoomSnapshot(roomCodeStr);
-        if (!existing || existing.updatedAt < decodedSnapshot.updatedAt) {
-          await store.saveRoomSnapshot(decodedSnapshot);
-          for (const p of decodedSnapshot.players) {
-            await store.setPlayerRoom(p.id, roomCodeStr);
+        const closedAt = closedRoomTimestamps.get(roomCodeStr);
+        const isStaleClosedRoom =
+          closedAt !== undefined && (decodedSnapshot.updatedAt ?? 0) <= closedAt;
+
+        if (!isStaleClosedRoom) {
+          const existing = await store.getRoomSnapshot(roomCodeStr);
+          if (!existing || existing.updatedAt < decodedSnapshot.updatedAt) {
+            await store.saveRoomSnapshot(decodedSnapshot);
+            for (const p of decodedSnapshot.players) {
+              if (p.connected !== false) {
+                await store.setPlayerRoom(p.id, roomCodeStr);
+              }
+            }
           }
         }
       }
     }
-
-    const type = body.type;
-    const payload = body.payload ?? {};
 
     let responseData: any = {};
     let updatedSnapshot: any = null;
@@ -85,6 +94,7 @@ export async function POST(req: NextRequest) {
       if (!result.ok) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
+      closedRoomTimestamps.delete(result.data.room.roomCode.toUpperCase());
       responseData = { room: result.data.room };
       updatedSnapshot = await store.getRoomSnapshot(result.data.room.roomCode);
     } else if (type === 'room:join') {
@@ -112,10 +122,24 @@ export async function POST(req: NextRequest) {
       };
       updatedSnapshot = await store.getRoomSnapshot(targetRoomCode);
     } else if (type === 'room:leave') {
-      const targetRoomCode = String(body.roomCode).toUpperCase();
+      const targetRoomCode = String(payload.roomCode ?? body.roomCode ?? '').toUpperCase();
+      if (!targetRoomCode) {
+        return NextResponse.json({ ok: true, data: { room: null } });
+      }
+      const companionIds = Array.isArray(payload.companionPlayerIds)
+        ? (payload.companionPlayerIds as string[])
+        : [];
+      for (const compId of companionIds) {
+        if (typeof compId === 'string' && compId.trim().length > 0) {
+          await manager.leaveRoom(compId, targetRoomCode);
+        }
+      }
       const result = await manager.leaveRoom(identity.playerId, targetRoomCode);
       if (!result.ok) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return NextResponse.json({ ok: true, data: { room: null } });
+      }
+      if (!result.data.room) {
+        closedRoomTimestamps.set(targetRoomCode, Date.now());
       }
       responseData = { room: result.data.room };
       updatedSnapshot = result.data.room
@@ -175,7 +199,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Room not found' }, { status: 404 });
       }
       const isSpectator = snapshot.spectators?.some((s) => s.id === identity.playerId);
-      const isPlayer = snapshot.players.some((p) => p.id === identity.playerId);
+      const isPlayer = snapshot.players.some(
+        (p) => p.id === identity.playerId && p.connected !== false
+      );
       if (!isPlayer && !isSpectator) {
         return NextResponse.json({ error: 'Not in room' }, { status: 403 });
       }
