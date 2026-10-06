@@ -47,14 +47,14 @@ export const ReplayViewerModal: React.FC<ReplayViewerModalProps> = ({
 
   useEffect(() => {
     if (initialData) {
-      setReplayData(initialData);
-      setLoading(false);
       return;
     }
 
     let active = true;
-    setLoading(true);
-    setError(null);
+    setTimeout(() => {
+      setLoading(true);
+      setError(null);
+    }, 0);
 
     fetch(`/api/matches/${matchId}/replay`)
       .then(async (res) => {
@@ -187,7 +187,7 @@ export const ReplayViewerModal: React.FC<ReplayViewerModalProps> = ({
     }
 
     if (stepIndex >= maxSteps) {
-      setIsPlaying(false);
+      setTimeout(() => setIsPlaying(false), 0);
       return;
     }
 

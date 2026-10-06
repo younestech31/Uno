@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to configure automatic fallback for client-side socket connections to use our persistent Google Cloud Run backend URL on Vercel or any other custom domain deployments.",
-  "updatedAt":  "2026-10-06T14:58:11.863201367Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Implementation plan to remove the hardcoded dead Cloud Run URL and add a built-in Vercel HTTP/RPC fallback transport so CardClash works standalone on Vercel as well as on persistent Socket.IO servers.",
+  "updatedAt": "2026-10-06T15:35:40.241635946Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

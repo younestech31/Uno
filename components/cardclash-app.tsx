@@ -203,46 +203,6 @@ function playSynthesizedFx(
   }
 }
 
-function speakAnnouncerCallout(
-  callout: 'yourTurn' | 'uno' | 'wild4' | 'victory',
-  enabled: boolean
-): void {
-  if (!enabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-    const text =
-      callout === 'yourTurn'
-        ? 'Your Turn!'
-        : callout === 'uno'
-          ? 'UNO!'
-          : callout === 'wild4'
-            ? 'Wild Draw Four!'
-            : 'Victory!';
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.25;
-    utterance.pitch = 1.05;
-    utterance.volume = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const naturalVoice = voices.find(
-      (v) =>
-        v.lang.startsWith('en') &&
-        (v.name.includes('Natural') ||
-          v.name.includes('Google') ||
-          v.name.includes('Samantha') ||
-          v.name.includes('Daniel') ||
-          v.default)
-    );
-    if (naturalVoice) {
-      utterance.voice = naturalVoice;
-    }
-
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    // Ignore speech synthesis errors if blocked by browser policy
-  }
-}
 
 function formatActionTickerText(
   evt: GameEvent,
@@ -444,6 +404,270 @@ async function fetchAccountToken(
   return (await res.json()) as SessionCredentials;
 }
 
+type SocketCallback = (data: any) => void;
+
+class ServerlessFallbackSocket {
+  private listeners = new Map<string, Set<SocketCallback>>();
+  private pollingInterval: ReturnType<typeof setInterval> | null = null;
+  public connected = false;
+
+  constructor(
+    private token: string,
+    private playerId: string
+  ) {
+    this.connected = true;
+    setTimeout(() => {
+      this.trigger('connect', null);
+    }, 50);
+
+    // Dynamic background room sync loop (polls every 1.5 seconds)
+    if (typeof window !== 'undefined') {
+      this.pollingInterval = setInterval(() => {
+        void this.pollSync();
+      }, 1500);
+    }
+  }
+
+  public on(event: string, callback: SocketCallback): this {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(callback);
+    return this;
+  }
+
+  public once(event: string, callback: SocketCallback): this {
+    const wrapper = (data: any) => {
+      this.off(event, wrapper);
+      callback(data);
+    };
+    return this.on(event, wrapper);
+  }
+
+  public off(event: string, callback: SocketCallback): this {
+    const set = this.listeners.get(event);
+    if (set) {
+      set.delete(callback);
+    }
+    return this;
+  }
+
+  public disconnect(): void {
+    this.connected = false;
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+    }
+    this.trigger('disconnect', null);
+  }
+
+  public trigger(event: string, data: any): void {
+    const set = this.listeners.get(event);
+    if (set) {
+      for (const cb of set) {
+        try {
+          cb(data);
+        } catch (e) {
+          console.error('[ServerlessFallbackSocket] Callback error:', e);
+        }
+      }
+    }
+
+    // Broadcast across tabs/seats inside the same window using custom window event
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('cardclash_sync_event', {
+          detail: { event, data, playerId: this.playerId },
+        })
+      );
+    }
+  }
+
+  private getSnapshotToken(): string | null {
+    if (typeof window === 'undefined') return null;
+    const roomCode = window.sessionStorage.getItem('cardclash_active_room');
+    if (!roomCode) return null;
+    return window.sessionStorage.getItem(`cardclash_snapshot_${roomCode}`);
+  }
+
+  private saveSnapshotToken(roomCode: string, token: string): void {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.setItem('cardclash_active_room', roomCode);
+    window.sessionStorage.setItem(`cardclash_snapshot_${roomCode}`, token);
+  }
+
+  private async pollSync() {
+    if (typeof window === 'undefined') return;
+    const roomCode = window.sessionStorage.getItem('cardclash_active_room');
+    if (!roomCode) return;
+
+    try {
+      const token = this.getSnapshotToken();
+      const res = await fetch('/api/rpc', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify({
+          type: 'room:sync',
+          roomCode,
+          snapshotToken: token || undefined,
+        }),
+      });
+
+      if (res.ok) {
+        const envelope = await res.json();
+        if (envelope.ok && envelope.data) {
+          if (envelope.snapshotToken) {
+            this.saveSnapshotToken(roomCode, envelope.snapshotToken);
+          }
+          this.trigger(SOCKET_EVENTS.ROOM_STATE, envelope.data.room);
+          if (envelope.data.view) {
+            this.trigger(SOCKET_EVENTS.GAME_VIEW, { view: envelope.data.view });
+          }
+        }
+      }
+    } catch {
+      // Ignore background poll errors
+    }
+  }
+
+  public emit(event: string, payload: any, ack?: SocketCallback): void {
+    void this.dispatchEmit(event, payload, ack);
+  }
+
+  private async dispatchEmit(event: string, payload: any, ack?: SocketCallback) {
+    try {
+      let rpcType = '';
+      let rpcPayload = payload;
+      let roomCode = payload?.roomCode;
+
+      if (event === SOCKET_EVENTS.ROOM_CREATE) {
+        rpcType = 'room:create';
+      } else if (event === SOCKET_EVENTS.ROOM_JOIN) {
+        rpcType = 'room:join';
+        roomCode = payload.roomCode;
+      } else if (event === SOCKET_EVENTS.ROOM_SPECTATE) {
+        rpcType = 'room:spectate';
+        roomCode = payload.roomCode;
+      } else if (event === SOCKET_EVENTS.ROOM_READY) {
+        rpcType = 'room:ready';
+        roomCode = payload.roomCode;
+      } else if (event === SOCKET_EVENTS.ROOM_START) {
+        rpcType = 'room:start';
+        roomCode = payload.roomCode;
+      } else if (event === SOCKET_EVENTS.ROOM_REMATCH) {
+        rpcType = 'room:rematch';
+        roomCode = payload.roomCode;
+      } else if (event === SOCKET_EVENTS.ROOM_LEAVE) {
+        rpcType = 'room:leave';
+        roomCode = payload.roomCode;
+      } else if (event === SOCKET_EVENTS.GAME_ACTION) {
+        rpcType = 'game:action';
+        roomCode = payload.roomCode;
+        rpcPayload = payload.action;
+      } else if (event === SOCKET_EVENTS.SESSION_HEARTBEAT) {
+        if (ack) {
+          ack({ ok: true, data: { serverTime: Date.now(), roomCode: null, turnDeadlineAt: null } });
+        }
+        return;
+      } else {
+        return;
+      }
+
+      const activeRoom = roomCode || (typeof window !== 'undefined' ? window.sessionStorage.getItem('cardclash_active_room') : null);
+      const snapToken = activeRoom ? this.getSnapshotToken() : null;
+
+      const res = await fetch('/api/rpc', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify({
+          type: rpcType,
+          payload: rpcPayload,
+          roomCode: activeRoom || undefined,
+          snapshotToken: snapToken || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => ({}));
+        const errObj = { code: 'RPC_ERROR', message: errPayload.error?.message || errPayload.error || 'Serverless action failed' };
+        this.trigger(SOCKET_EVENTS.ERROR_EVENT, errObj);
+        if (ack) ack({ ok: false, error: errObj });
+        return;
+      }
+
+      const envelope = await res.json();
+      if (envelope.ok && envelope.data) {
+        const data = envelope.data;
+        const currentRoomCode = data.room?.roomCode || activeRoom;
+        if (currentRoomCode && envelope.snapshotToken) {
+          this.saveSnapshotToken(currentRoomCode, envelope.snapshotToken);
+        }
+
+        if (data.room) {
+          this.trigger(SOCKET_EVENTS.ROOM_STATE, data.room);
+        }
+        if (data.view) {
+          this.trigger(SOCKET_EVENTS.GAME_VIEW, { view: data.view });
+        }
+        if (data.viewsByPlayer && data.viewsByPlayer[this.playerId]) {
+          this.trigger(SOCKET_EVENTS.GAME_VIEW, { view: data.viewsByPlayer[this.playerId] });
+        }
+        if (data.events) {
+          this.trigger(SOCKET_EVENTS.GAME_EVENTS, { events: data.events });
+        }
+
+        if (ack) {
+          ack({ ok: true, data });
+        }
+
+        // Broadcaster for other seats in the same browser window
+        if (typeof window !== 'undefined' && data.room) {
+          window.dispatchEvent(
+            new CustomEvent('cardclash_sync_broadcast', {
+              detail: {
+                room: data.room,
+                viewsByPlayer: data.viewsByPlayer || null,
+                events: data.events || null,
+                sourcePlayerId: this.playerId,
+              },
+            })
+          );
+        }
+      }
+    } catch (e: any) {
+      const errObj = { code: 'FETCH_ERROR', message: e?.message || 'Network request failed' };
+      this.trigger(SOCKET_EVENTS.ERROR_EVENT, errObj);
+      if (ack) ack({ ok: false, error: errObj });
+    }
+  }
+}
+
+function createGameSocket(creds: SessionCredentials): any {
+  const socketUrl = getBackendUrl();
+  const isVercelStandalone =
+    typeof window !== 'undefined' &&
+    window.location.hostname &&
+    !window.location.hostname.includes('localhost') &&
+    !window.location.hostname.includes('127.0.0.1') &&
+    !window.location.hostname.includes('europe-west3.run.app') &&
+    !process.env.NEXT_PUBLIC_SOCKET_URL;
+
+  if (isVercelStandalone) {
+    console.log('[CardClash] Standalone Vercel mode -> using built-in ServerlessFallbackSocket');
+    return new ServerlessFallbackSocket(creds.token, creds.playerId) as any;
+  }
+
+  return io(socketUrl, {
+    auth: { token: creds.token },
+    transports: ['websocket', 'polling'],
+  });
+}
+
 export default function CardClashApp() {
   const [playerName, setPlayerName] = useState<string>('Alex');
   const [primaryCreds, setPrimaryCreds] = useState<SessionCredentials | null>(
@@ -556,7 +780,6 @@ export default function CardClashApp() {
             const wasMyTurnBefore = prevView?.currentPlayerId === creds.playerId;
             if (isMyTurnNow && !wasMyTurnBefore && payload.view.status === 'IN_PROGRESS') {
               playSynthesizedFx('yourTurn', soundEnabledRef.current);
-              speakAnnouncerCallout('yourTurn', soundEnabledRef.current);
             }
             return {
               ...prev,
@@ -591,25 +814,18 @@ export default function CardClashApp() {
               }
             }
 
-            // Trigger rich Web Audio synthesized sound feedback & major event announcer voice callouts
+            // Trigger rich Web Audio synthesized sound feedback chimes
             if (evt.type === 'CARD_PLAYED') {
               const isWild = evt.card.color === 'WILD';
               playSynthesizedFx(isWild ? 'wild' : 'play', soundEnabledRef.current, isWild ? 'WILD' : evt.card.color);
-              if (evt.card.kind === 'WILD_DRAW_FOUR') {
-                speakAnnouncerCallout('wild4', soundEnabledRef.current);
-              }
             } else if (evt.type === 'CARDS_DRAWN') {
               playSynthesizedFx('draw', soundEnabledRef.current);
             } else if (evt.type === 'UNO_CALLED' || evt.type === 'UNO_CAUGHT') {
               playSynthesizedFx('uno', soundEnabledRef.current);
-              if (evt.type === 'UNO_CALLED') {
-                speakAnnouncerCallout('uno', soundEnabledRef.current);
-              }
             } else if (evt.type === 'HANDS_SWAPPED' || evt.type === 'WD4_CHALLENGE_RESOLVED') {
               playSynthesizedFx('swap', soundEnabledRef.current);
             } else if (evt.type === 'ROUND_ENDED' || evt.type === 'MATCH_ENDED') {
               playSynthesizedFx('win', soundEnabledRef.current);
-              speakAnnouncerCallout('victory', soundEnabledRef.current);
               if (evt.type === 'MATCH_ENDED') {
                 void refreshLeaderboardAndHistory();
               }
@@ -667,11 +883,7 @@ export default function CardClashApp() {
           [creds.playerId]: creds,
         }));
 
-        const socketUrl = getBackendUrl();
-        const socket = io(socketUrl, {
-          auth: { token: creds.token },
-          transports: ['websocket', 'polling'],
-        });
+        const socket = createGameSocket(creds);
 
         seatsMap.set(creds.playerId, { credentials: creds, socket });
         registerSocketListeners(socket, creds, true);
@@ -845,12 +1057,7 @@ export default function CardClashApp() {
         seatsRef.current.delete(prevId);
       }
 
-      const socketUrl =
-        process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin;
-      const socket = io(socketUrl, {
-        auth: { token: updated.token },
-        transports: ['websocket', 'polling'],
-      });
+      const socket = createGameSocket(updated);
 
       seatsRef.current.set(updated.playerId, {
         credentials: updated,
@@ -996,13 +1203,7 @@ export default function CardClashApp() {
 
     try {
       const creds = await fetchGuestToken(companionName);
-      const socketUrl =
-        process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin;
-
-      const compSocket = io(socketUrl, {
-        auth: { token: creds.token },
-        transports: ['websocket', 'polling'],
-      });
+      const compSocket = createGameSocket(creds);
 
       seatsRef.current.set(creds.playerId, {
         credentials: creds,

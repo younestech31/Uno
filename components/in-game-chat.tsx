@@ -35,29 +35,40 @@ export interface InGameChatDrawerProps {
   readonly spectatorCount?: number;
 }
 
+const getDeterministicOffset = (id: string): number => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return (Math.abs(hash) % 40) - 20;
+};
+
 export const FloatingEmojiContainer: React.FC<{
   readonly emojis: readonly FloatingEmoji[];
 }> = ({ emojis }) => {
   return (
     <div className="pointer-events-none fixed inset-0 z-40 overflow-hidden">
       <AnimatePresence>
-        {emojis.map((item) => (
-          <motion.div
-            key={item.id}
-            initial={{ opacity: 0, scale: 0.4, x: item.x, y: item.y }}
-            animate={{
-              opacity: [0, 1, 1, 0],
-              scale: [0.4, 1.4, 1.2, 0.8],
-              y: item.y - 140,
-              x: item.x + (Math.random() * 40 - 20),
-            }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 2.2, ease: 'easeOut' }}
-            className="absolute text-4xl select-none filter drop-shadow-lg"
-          >
-            {item.emoji}
-          </motion.div>
-        ))}
+        {emojis.map((item) => {
+          const offset = getDeterministicOffset(item.id);
+          return (
+            <motion.div
+              key={item.id}
+              initial={{ opacity: 0, scale: 0.4, x: item.x, y: item.y }}
+              animate={{
+                opacity: [0, 1, 1, 0],
+                scale: [0.4, 1.4, 1.2, 0.8],
+                y: item.y - 140,
+                x: item.x + offset,
+              }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 2.2, ease: 'easeOut' }}
+              className="absolute text-4xl select-none filter drop-shadow-lg"
+            >
+              {item.emoji}
+            </motion.div>
+          );
+        })}
       </AnimatePresence>
     </div>
   );

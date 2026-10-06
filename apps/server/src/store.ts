@@ -283,3 +283,14 @@ export function createStateStore(redisUrl = process.env.REDIS_URL): StateStore {
   }
   return new InMemoryStateStore();
 }
+
+const globalForStateStore = globalThis as unknown as {
+  __cardclashStateStore?: StateStore;
+};
+
+export function getSharedStateStore(): StateStore {
+  if (!globalForStateStore.__cardclashStateStore) {
+    globalForStateStore.__cardclashStateStore = createStateStore();
+  }
+  return globalForStateStore.__cardclashStateStore;
+}
