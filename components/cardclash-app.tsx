@@ -77,8 +77,18 @@ const DEMO_CARDS: readonly Card[] = [
 const COMPANION_NAMES = ['Nova', 'Orion', 'Vega', 'Atlas', 'Lyra'];
 
 function playSynthesizedFx(
-  kind: 'play' | 'draw' | 'uno' | 'swap' | 'error' | 'win',
-  enabled: boolean
+  kind:
+    | 'play'
+    | 'draw'
+    | 'yourTurn'
+    | 'timerTick'
+    | 'uno'
+    | 'wild'
+    | 'swap'
+    | 'error'
+    | 'win',
+  enabled: boolean,
+  color?: ColoredCardColor | 'WILD'
 ): void {
   if (!enabled || typeof window === 'undefined') return;
   try {
@@ -95,53 +105,90 @@ function playSynthesizedFx(
 
     const now = ctx.currentTime;
     if (kind === 'play') {
-      // Crisp card snap / placement
+      // Color-pitched card snap
+      const baseFreq =
+        color === 'RED'
+          ? 580
+          : color === 'BLUE'
+            ? 440
+            : color === 'GREEN'
+              ? 520
+              : color === 'YELLOW'
+                ? 620
+                : 700;
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(440, now);
-      osc.frequency.exponentialRampToValueAtTime(680, now + 0.08);
-      gain.gain.setValueAtTime(0.12, now);
+      osc.frequency.setValueAtTime(baseFreq, now);
+      osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, now + 0.08);
+      gain.gain.setValueAtTime(0.14, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
       osc.start(now);
       osc.stop(now + 0.09);
     } else if (kind === 'draw') {
-      // Smooth card slide / draw rustle
+      // Smooth deck draw rustle
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(320, now);
-      osc.frequency.exponentialRampToValueAtTime(210, now + 0.1);
-      gain.gain.setValueAtTime(0.1, now);
+      osc.frequency.setValueAtTime(340, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.1);
+      gain.gain.setValueAtTime(0.12, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
       osc.start(now);
       osc.stop(now + 0.11);
+    } else if (kind === 'yourTurn') {
+      // Energetic 'Your Turn!' wake-up ping (C5 -> G5)
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.setValueAtTime(783.99, now + 0.08);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+      osc.start(now);
+      osc.stop(now + 0.22);
+    } else if (kind === 'timerTick') {
+      // Urgent woodblock timer tick
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, now);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      osc.start(now);
+      osc.stop(now + 0.05);
     } else if (kind === 'uno') {
-      // Bright two-tone energetic chime (D5 -> A5)
+      // Punchy dual chime (D5 -> A5)
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(587.33, now);
-      osc.frequency.setValueAtTime(880, now + 0.07);
-      gain.gain.setValueAtTime(0.14, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+      osc.frequency.setValueAtTime(880, now + 0.08);
+      gain.gain.setValueAtTime(0.16, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
       osc.start(now);
-      osc.stop(now + 0.24);
+      osc.stop(now + 0.26);
+    } else if (kind === 'wild') {
+      // Ascending wild chord sweep
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(900, now + 0.15);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+      osc.start(now);
+      osc.stop(now + 0.22);
     } else if (kind === 'swap') {
       // Swirl action chord for 7-0 swap or challenge
       osc.type = 'sine';
       osc.frequency.setValueAtTime(350, now);
       osc.frequency.linearRampToValueAtTime(700, now + 0.12);
       osc.frequency.linearRampToValueAtTime(520, now + 0.2);
-      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.setValueAtTime(0.12, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
       osc.start(now);
       osc.stop(now + 0.22);
     } else if (kind === 'win') {
-      // Celebratory 4-note ascending chord fanfare
+      // High-energy 5-note victory fanfare (C5 -> E5 -> G5 -> C6 -> E6)
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(523.25, now); // C5
       osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
       osc.frequency.setValueAtTime(783.99, now + 0.16); // G5
       osc.frequency.setValueAtTime(1046.5, now + 0.24); // C6
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      osc.frequency.setValueAtTime(1318.5, now + 0.32); // E6
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
       osc.start(now);
-      osc.stop(now + 0.4);
+      osc.stop(now + 0.5);
     } else {
       // Low warning buzz for errors
       osc.type = 'sawtooth';
@@ -156,28 +203,26 @@ function playSynthesizedFx(
   }
 }
 
-const speechQueue: string[] = [];
-let isSpeaking = false;
-
-function processSpeechQueue(): void {
-  if (
-    isSpeaking ||
-    speechQueue.length === 0 ||
-    typeof window === 'undefined' ||
-    !('speechSynthesis' in window)
-  ) {
-    return;
-  }
-
-  const nextText = speechQueue.shift();
-  if (!nextText) return;
-
+function speakAnnouncerCallout(
+  callout: 'yourTurn' | 'uno' | 'wild4' | 'victory',
+  enabled: boolean
+): void {
+  if (!enabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
   try {
-    isSpeaking = true;
-    const utterance = new SpeechSynthesisUtterance(nextText);
-    utterance.rate = 1.15;
-    utterance.pitch = 1.0;
-    utterance.volume = 0.95;
+    window.speechSynthesis.cancel();
+    const text =
+      callout === 'yourTurn'
+        ? 'Your Turn!'
+        : callout === 'uno'
+          ? 'UNO!'
+          : callout === 'wild4'
+            ? 'Wild Draw Four!'
+            : 'Victory!';
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.25;
+    utterance.pitch = 1.05;
+    utterance.volume = 1.0;
 
     const voices = window.speechSynthesis.getVoices();
     const naturalVoice = voices.find(
@@ -193,28 +238,13 @@ function processSpeechQueue(): void {
       utterance.voice = naturalVoice;
     }
 
-    const onFinish = () => {
-      isSpeaking = false;
-      processSpeechQueue();
-    };
-
-    utterance.onend = onFinish;
-    utterance.onerror = onFinish;
-
     window.speechSynthesis.speak(utterance);
   } catch {
-    isSpeaking = false;
-    processSpeechQueue();
+    // Ignore speech synthesis errors if blocked by browser policy
   }
 }
 
-function queueSpokenAnnouncement(text: string, enabled: boolean): void {
-  if (!enabled) return;
-  speechQueue.push(text);
-  processSpeechQueue();
-}
-
-function formatCompactSpokenPhrase(
+function formatActionTickerText(
   evt: GameEvent,
   players: readonly { id: string; name: string }[]
 ): string | null {
@@ -222,38 +252,43 @@ function formatCompactSpokenPhrase(
 
   switch (evt.type) {
     case 'ROUND_STARTED':
-      return `Round ${evt.roundNumber} started`;
+      return `Round ${evt.roundNumber} started · ${nameOf(evt.startingPlayerId)} leads`;
     case 'INITIAL_COLOR_CHOSEN':
-      return `Suit: ${SUIT_META[evt.color].label}`;
+      return `${nameOf(evt.playerId)} set starting suit to ${SUIT_META[evt.color].label} (${SUIT_META[evt.color].symbol})`;
     case 'CARD_PLAYED': {
-      const cardName = evt.card.id.replace(/-\d+$/, '');
-      const suitPart = evt.chosenColor ? ` ${SUIT_META[evt.chosenColor].label}` : '';
-      const jumpPart = evt.jumpedIn ? ' Jump In' : '';
-      return `${nameOf(evt.playerId)}: ${cardName}${suitPart}${jumpPart}`;
+      const suitPart = evt.chosenColor
+        ? ` → ${SUIT_META[evt.chosenColor].label} ${SUIT_META[evt.chosenColor].symbol}`
+        : '';
+      const jumpPart = evt.jumpedIn ? ' (Jump-In!)' : '';
+      return `${nameOf(evt.playerId)} played ${evt.card.id.replace(/-\d+$/, '')}${suitPart}${jumpPart}`;
     }
     case 'CARDS_DRAWN':
       if (evt.count <= 1) {
-        return `${nameOf(evt.playerId)}: Draw`;
+        return `${nameOf(evt.playerId)} drew a card`;
       }
-      return `${nameOf(evt.playerId)}: Draw ${evt.count}`;
+      return `${nameOf(evt.playerId)} drew ${evt.count} cards (${evt.reason.replace(/_/g, ' ')})`;
     case 'TURN_SKIPPED':
-      return `${nameOf(evt.skippedPlayerId)}: Skipped`;
+      return `${nameOf(evt.skippedPlayerId)} was skipped`;
     case 'DIRECTION_REVERSED':
-      return `Reverse`;
+      return `Play direction reversed (${evt.direction === 1 ? 'Clockwise' : 'Counter-Clockwise'})`;
     case 'DECK_RESHUFFLED':
-      return `Deck reshuffled`;
+      return `Discard pile reshuffled into ${evt.newDrawPileCount}-card draw deck`;
     case 'UNO_CALLED':
-      return `${nameOf(evt.playerId)}: UNO!`;
+      return `${nameOf(evt.playerId)} called UNO!`;
     case 'UNO_CAUGHT':
-      return `${nameOf(evt.catcherId)} caught ${nameOf(evt.caughtId)}`;
+      return `${nameOf(evt.catcherId)} caught ${nameOf(evt.caughtId)} (+${evt.penaltyCount} cards)!`;
     case 'HANDS_SWAPPED':
-      return `Hands swapped`;
+      return evt.mode === 'ZERO_ROTATE'
+        ? `${nameOf(evt.sourcePlayerId)} played 0 — all hands rotated!`
+        : `${nameOf(evt.sourcePlayerId)} swapped hands with ${nameOf(evt.targetPlayerId ?? '')}!`;
     case 'WD4_CHALLENGE_RESOLVED':
-      return evt.wasGuilty ? `Bluff caught!` : `Challenge failed!`;
+      return evt.wasGuilty
+        ? `Challenge won! ${nameOf(evt.blufferId)} caught bluffing (+4 cards)`
+        : `Challenge failed! ${nameOf(evt.challengerId)} drew 6 cards`;
     case 'ROUND_ENDED':
-      return `${nameOf(evt.winnerId)} wins Round ${evt.roundNumber}!`;
+      return `${nameOf(evt.winnerId)} won Round ${evt.roundNumber} (+${evt.pointsEarned} pts)`;
     case 'MATCH_ENDED':
-      return `${nameOf(evt.winnerId)} wins the match!`;
+      return `${nameOf(evt.winnerId)} won the match!`;
     default:
       return null;
   }
@@ -349,14 +384,35 @@ function formatEventToast(
   }
 }
 
+function getBackendUrl(): string {
+  if (process.env.NEXT_PUBLIC_SOCKET_URL) {
+    return process.env.NEXT_PUBLIC_SOCKET_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    // Dynamic fallback to the persistent dev backend when running on custom deploy targets (like Vercel)
+    if (
+      hostname &&
+      hostname !== 'localhost' &&
+      hostname !== '127.0.0.1' &&
+      !hostname.includes('europe-west3.run.app')
+    ) {
+      return 'https://ais-pre-edxfqef7v2eiu27e45gevo-89927942959.europe-west3.run.app';
+    }
+    return window.location.origin;
+  }
+  return 'https://ais-pre-edxfqef7v2eiu27e45gevo-89927942959.europe-west3.run.app';
+}
+
 async function fetchGuestToken(
   name: string,
   existingPlayerId?: string
 ): Promise<SessionCredentials> {
-  if (!process.env.NEXT_PUBLIC_SOCKET_URL) {
+  const backendUrl = getBackendUrl();
+  if (backendUrl === window.location.origin) {
     await fetch('/api/socketio').catch(() => null);
   }
-  const res = await fetch('/api/session/guest', {
+  const res = await fetch(`${backendUrl}/api/session/guest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, playerId: existingPlayerId }),
@@ -372,10 +428,11 @@ async function fetchAccountToken(
   name: string,
   existingPlayerId?: string
 ): Promise<SessionCredentials> {
-  if (!process.env.NEXT_PUBLIC_SOCKET_URL) {
+  const backendUrl = getBackendUrl();
+  if (backendUrl === window.location.origin) {
     await fetch('/api/socketio').catch(() => null);
   }
-  const res = await fetch('/api/auth/session', {
+  const res = await fetch(`${backendUrl}/api/auth/session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, name, playerId: existingPlayerId }),
@@ -419,6 +476,7 @@ export default function CardClashApp() {
   });
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [lastActionText, setLastActionText] = useState<string | null>(null);
 
   const [seatCredentialsById, setSeatCredentialsById] = useState<
     Record<string, SessionCredentials>
@@ -451,7 +509,8 @@ export default function CardClashApp() {
   const refreshLeaderboardAndHistory = useCallback(async () => {
     setLoadingLeaderboard(true);
     try {
-      const res = await fetch('/api/leaderboard');
+      const backendUrl = getBackendUrl();
+      const res = await fetch(`${backendUrl}/api/leaderboard`);
       if (res.ok) {
         const data = (await res.json()) as LeaderboardResponse;
         setLeaderboard(data.leaderboard ?? []);
@@ -488,10 +547,28 @@ export default function CardClashApp() {
         if (isPrimary && payload.turnDeadlineAt !== undefined) {
           setTurnDeadlineAt(payload.turnDeadlineAt);
         }
-        setViewsBySeat((prev) => ({
-          ...prev,
-          [creds.playerId]: payload.view,
-        }));
+
+        if (isPrimary) {
+          // Detect turn transition to primary player -> Trigger 'Your Turn!' sound ping + announcer voice
+          setViewsBySeat((prev) => {
+            const prevView = prev[creds.playerId];
+            const isMyTurnNow = payload.view.currentPlayerId === creds.playerId;
+            const wasMyTurnBefore = prevView?.currentPlayerId === creds.playerId;
+            if (isMyTurnNow && !wasMyTurnBefore && payload.view.status === 'IN_PROGRESS') {
+              playSynthesizedFx('yourTurn', soundEnabledRef.current);
+              speakAnnouncerCallout('yourTurn', soundEnabledRef.current);
+            }
+            return {
+              ...prev,
+              [creds.playerId]: payload.view,
+            };
+          });
+        } else {
+          setViewsBySeat((prev) => ({
+            ...prev,
+            [creds.playerId]: payload.view,
+          }));
+        }
       });
 
       if (isPrimary) {
@@ -500,10 +577,10 @@ export default function CardClashApp() {
           const isInActiveGame = roomRef.current?.status === 'IN_GAME';
 
           for (const evt of payload.events) {
-            // Queue compact spoken phrase sequentially (never interrupts ongoing speech)
-            const spokenPhrase = formatCompactSpokenPhrase(evt, members);
-            if (spokenPhrase) {
-              queueSpokenAnnouncement(spokenPhrase, soundEnabledRef.current);
+            // Update subtle visual action ticker in center HUD bar
+            const tickerText = formatActionTickerText(evt, members);
+            if (tickerText) {
+              setLastActionText(tickerText);
             }
 
             // Text toasts are omitted during active gameplay
@@ -514,17 +591,25 @@ export default function CardClashApp() {
               }
             }
 
-            // Trigger distinct Web Audio synthesized sound feedback for each game event
+            // Trigger rich Web Audio synthesized sound feedback & major event announcer voice callouts
             if (evt.type === 'CARD_PLAYED') {
-              playSynthesizedFx('play', soundEnabledRef.current);
+              const isWild = evt.card.color === 'WILD';
+              playSynthesizedFx(isWild ? 'wild' : 'play', soundEnabledRef.current, isWild ? 'WILD' : evt.card.color);
+              if (evt.card.kind === 'WILD_DRAW_FOUR') {
+                speakAnnouncerCallout('wild4', soundEnabledRef.current);
+              }
             } else if (evt.type === 'CARDS_DRAWN') {
               playSynthesizedFx('draw', soundEnabledRef.current);
             } else if (evt.type === 'UNO_CALLED' || evt.type === 'UNO_CAUGHT') {
               playSynthesizedFx('uno', soundEnabledRef.current);
+              if (evt.type === 'UNO_CALLED') {
+                speakAnnouncerCallout('uno', soundEnabledRef.current);
+              }
             } else if (evt.type === 'HANDS_SWAPPED' || evt.type === 'WD4_CHALLENGE_RESOLVED') {
               playSynthesizedFx('swap', soundEnabledRef.current);
             } else if (evt.type === 'ROUND_ENDED' || evt.type === 'MATCH_ENDED') {
               playSynthesizedFx('win', soundEnabledRef.current);
+              speakAnnouncerCallout('victory', soundEnabledRef.current);
               if (evt.type === 'MATCH_ENDED') {
                 void refreshLeaderboardAndHistory();
               }
@@ -582,8 +667,7 @@ export default function CardClashApp() {
           [creds.playerId]: creds,
         }));
 
-        const socketUrl =
-          process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin;
+        const socketUrl = getBackendUrl();
         const socket = io(socketUrl, {
           auth: { token: creds.token },
           transports: ['websocket', 'polling'],
@@ -1121,6 +1205,7 @@ export default function CardClashApp() {
           activeSeatId={activeView.viewerId}
           autoPlayCompanions={autoPlayCompanions}
           soundEnabled={soundEnabled}
+          lastActionText={lastActionText}
           onSwitchSeat={(pid) => setActiveSeatId(pid)}
           onToggleAutoPlay={() => setAutoPlayCompanions((v) => !v)}
           onToggleSound={() => setSoundEnabled((v) => !v)}

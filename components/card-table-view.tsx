@@ -54,6 +54,7 @@ export interface CardTableViewProps {
   readonly activeSeatId: string;
   readonly autoPlayCompanions: boolean;
   readonly soundEnabled: boolean;
+  readonly lastActionText?: string | null;
   readonly isSpectator?: boolean;
   readonly spectatorCount?: number;
   readonly unreadChatCount?: number;
@@ -76,6 +77,7 @@ export function CardTableView({
   activeSeatId,
   autoPlayCompanions,
   soundEnabled,
+  lastActionText,
   isSpectator = false,
   spectatorCount = 0,
   unreadChatCount = 0,
@@ -374,41 +376,49 @@ export function CardTableView({
 
       {/* Main Table Arena */}
       <main className="flex-1 flex flex-col items-center justify-center p-3 relative">
-        {/* Turn Direction & Turn Timer Banner */}
-        <div className="mb-4 flex items-center gap-3 text-xs font-semibold text-stone-300 bg-slate-950/60 px-4 py-1.5 rounded-full border border-white/10 backdrop-blur-sm">
-          <span className="flex items-center gap-1 text-emerald-400">
-            {view.direction === 1 ? (
+        {/* Turn Direction, Turn Timer & Action Ticker Banner */}
+        <div className="mb-4 flex flex-col items-center gap-1.5 text-xs font-semibold text-stone-300 bg-slate-950/70 px-4.5 py-2 rounded-2xl border border-white/10 backdrop-blur-sm shadow-xl max-w-lg w-full sm:w-auto">
+          <div className="flex items-center justify-center gap-3 flex-wrap">
+            <span className="flex items-center gap-1 text-emerald-400">
+              {view.direction === 1 ? (
+                <>
+                  <RotateCw className="w-3.5 h-3.5" /> Clockwise
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5" /> Counter-Clockwise
+                </>
+              )}
+            </span>
+
+            <span aria-hidden="true" className="text-white/20">
+              |
+            </span>
+
+            <span className={isMyTurn ? 'text-amber-300 font-bold animate-pulse' : 'text-stone-300'}>
+              {activePlayerName}
+            </span>
+
+            {secondsRemaining !== null && (
               <>
-                <RotateCw className="w-3.5 h-3.5" /> Clockwise
-              </>
-            ) : (
-              <>
-                <RotateCcw className="w-3.5 h-3.5" /> Counter-Clockwise
+                <span aria-hidden="true" className="text-white/20">
+                  |
+                </span>
+                <span
+                  className={`font-mono tabular-nums font-bold ${
+                    secondsRemaining <= 10 ? 'text-rose-400 animate-ping' : 'text-stone-300'
+                  }`}
+                >
+                  {secondsRemaining}s
+                </span>
               </>
             )}
-          </span>
+          </div>
 
-          <span aria-hidden="true" className="text-white/20">
-            |
-          </span>
-
-          <span className={isMyTurn ? 'text-amber-300 font-bold animate-pulse' : 'text-stone-300'}>
-            {activePlayerName}
-          </span>
-
-          {secondsRemaining !== null && (
-            <>
-              <span aria-hidden="true" className="text-white/20">
-                |
-              </span>
-              <span
-                className={`font-mono tabular-nums font-bold ${
-                  secondsRemaining <= 10 ? 'text-rose-400 animate-ping' : 'text-stone-300'
-                }`}
-              >
-                {secondsRemaining}s
-              </span>
-            </>
+          {lastActionText && (
+            <div className="pt-1.5 border-t border-white/10 w-full text-center text-xs font-semibold text-emerald-300 tracking-tight transition-all">
+              {lastActionText}
+            </div>
           )}
         </div>
 
