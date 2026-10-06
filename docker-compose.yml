@@ -1,0 +1,59 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cardclash-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://cardclash:clashsecret@postgres:5432/cardclash
+      - SESSION_SECRET=production_cardclash_hmac_secret_key_change_me
+      - AUTH_SECRET=production_cardclash_auth_secret_change_me
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: cardclash-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cardclash-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=cardclash
+      - POSTGRES_PASSWORD=clashsecret
+      - POSTGRES_DB=cardclash
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardclash -d cardclash"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local

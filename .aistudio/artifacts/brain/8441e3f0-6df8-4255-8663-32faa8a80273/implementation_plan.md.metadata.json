@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for Sequential Non-Interrupting Text-To-Speech (TTS) announcements with compact snappy phrases ('Alex: Red 7', 'Nova: Draw 2') using a FIFO SpeechSynthesisUtterance queue.",
+  "updatedAt": "2026-10-06T14:27:15.505089854Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

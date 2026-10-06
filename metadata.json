@@ -1,0 +1,6 @@
+{
+  "name": "CardClash",
+  "description": "Real-time multiplayer UNO-style shedding card game built with an authoritative deterministic TypeScript engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

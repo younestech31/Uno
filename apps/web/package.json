@@ -1,0 +1,9 @@
+{
+  "name": "@cardclash/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CardClash stateless Next.js web application (served at workspace root on port 3000 for preview compatibility).",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ../../tsconfig.json"
+  }
+}
