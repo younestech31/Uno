@@ -349,19 +349,9 @@ function getBackendUrl(): string {
     return process.env.NEXT_PUBLIC_SOCKET_URL;
   }
   if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    // Dynamic fallback to the persistent dev backend when running on custom deploy targets (like Vercel)
-    if (
-      hostname &&
-      hostname !== 'localhost' &&
-      hostname !== '127.0.0.1' &&
-      !hostname.includes('europe-west3.run.app')
-    ) {
-      return 'https://ais-pre-edxfqef7v2eiu27e45gevo-89927942959.europe-west3.run.app';
-    }
     return window.location.origin;
   }
-  return 'https://ais-pre-edxfqef7v2eiu27e45gevo-89927942959.europe-west3.run.app';
+  return '';
 }
 
 async function fetchGuestToken(
