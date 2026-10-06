@@ -1,75 +1,23 @@
-# Standalone Vercel Compatibility & Dual-Transport Fallback Plan
+# Comprehensive Gameplay, Sound, VFX, & PWA Tuning Plan
 
-Remove the dead hardcoded Cloud Run URL so session and leaderboard requests always talk directly to your deployed app origin, and add a built-in Next.js Serverless HTTP/RPC transport fallback so room creation, companion seats, and full gameplay work out-of-the-box on Vercel without requiring an external Socket.IO host.
+Implement high-fidelity gameplay upgrades, modern arcade-style sound chimes, dynamic card play visual effects, and professional native app-like mobile gesture optimizations for the Progressive Web App (PWA):
 
-## User Review & Critical Decisions
+1. **High-Fidelity Audio Upgrades (Modern Arcade & Card Snaps)**:
+   - **Card Play Sound with Physical Snap ('play')**: Upgrade the Web Audio synthesizer in `/components/cardclash-app.tsx` to use **polyphonic dual oscillators**. Oscillator 1 plays a clean triangle wave tuned to the card's color (C5 for Red, E5 for Blue, G5 for Yellow, C6 for Green). Oscillator 2 plays a highly-damped, low-frequency sawtooth wave (100Hz down to 40Hz) over 0.05 seconds, simulating the physical tactile "snap/clack" of cardboard.
+   - **Rich Draw Card Sweep ('draw')**: Generate a detuned dual-frequency ascending sweep (Oscillator 1: 300Hz -> 700Hz, Oscillator 2: 315Hz -> 730Hz) simulating a smooth "slick/swoosh" drawing movement.
+   - **Warm "Your Turn" Major Chord Chime ('yourTurn')**: Arpeggiate an uplifting E-Major electronic bell chime (E5 -> G#5 -> B5 -> E6) using multiple sine waves to grab attention elegantly.
+   - **Brassy UNO Synth sweep ('uno')**: Trigger a fat, dual-tone brassy synth chord (C5 + G5 simultaneously) with an LFO-like frequency vibration sweep.
+   - **Uplifting Victory Fanfare ('win')**: Play an arpeggiated, upward-moving Major-7th arpeggio (C5 -> E5 -> G5 -> B5 -> C6 -> E6 -> G6) in rapid arcade style.
 
-> [!IMPORTANT]
-> Confirmed in Phase 1:
-> - **Remove Hardcoded Cloud Run URL**: All session (`/api/session/guest`, `/api/auth/session`) and leaderboard (`/api/leaderboard`) calls will use the current site origin (`window.location.origin`), fixing `Session Error: Failed to fetch` on `unodz.vercel.app`.
-> - **Built-In Vercel Standalone HTTP/RPC Transport**: When deployed on Vercel without an external `NEXT_PUBLIC_SOCKET_URL`, the client automatically uses a built-in Next.js App Router RPC endpoint (`/api/rpc`) with signed state hydration so creating rooms, joining, adding companion bots, and playing full matches work natively on Vercel Serverless.
+2. **Dynamic Visual Effects (Flashes, Bounces, & Slick Moves)**:
+   - **Background Screen Flash Pulse**: In `/components/card-table-view.tsx`, watch for changes in `view.topDiscard.id`. When a card is played, trigger a brief (450ms) full-viewport background glow or screen-border gradient flash matching the played card color (Red, Blue, Yellow, Green, or Purple/Gold for Wild cards), rendering a beautiful ambient lightning flash that fades out.
+   - **Discard Card-Play Bounce**: Bind a `motion.div` wrapper around the discard pile card graphic. When `view.topDiscard.id` changes, use spring-physics scale/rotate animations to make the new card bounce onto the pile with a tactile, heavy, physical settling effect.
+   - **Draw Deck Interaction**: Add a gentle breathing/pulsing animation to the draw deck when `canDrawNow` is active, inviting player touch with a clean visual affordance.
 
-- **Confirmed Decision 1**: Remove the dead `ais-pre-...run.app` fallback URL from the client.
-- **Confirmed Decision 2**: Add an automatic Next.js `/api/rpc` fallback transport for standalone Vercel deployments while preserving native Socket.IO support when `NEXT_PUBLIC_SOCKET_URL` or `server.ts` is used.
+3. **Compact Opponent Card Deck Styling**:
+   - Restructure the opponent card deck display inside `/components/card-table-view.tsx` to display **at most 3 closely overlapping card backs** using a tight `-space-x-5` layout with `shrink-0` bounds to prevent UI wrapping/layout breaking on mobile viewports.
 
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**:
-  1. Fixes `POST /api/session/guest` on Vercel by always calling the current origin (`window.location.origin`) unless `NEXT_PUBLIC_SOCKET_URL` is explicitly configured.
-  2. Provides a seamless Dual-Transport Client (`Socket.IO` + `HTTP RPC Fallback`) backed by a Next.js App Router endpoint (`POST /api/rpc`).
-  3. Includes HMAC-signed room snapshot continuity so even if Vercel scales across multiple stateless serverless function instances without Redis, active rooms and matches never drop or 404.
-- **Target Audience / Persona**: Players and hosts opening `unodz.vercel.app` (or any Vercel preview/production URL) expecting instant guest token issuance, room creation, and responsive gameplay.
-- **Key Value**: Zero-configuration deployment on Vercel while maintaining 100% compatibility with dedicated Socket.IO servers (`server.ts`, Docker, Fly.io, Railway).
-
----
-
-## 2. User Experience & Visual Design
-
-- **Key User Flows**:
-  1. **Instant Session Issuance**: Opening `unodz.vercel.app` immediately issues a guest token from `POST /api/session/guest` on the same origin and transitions the status indicator to `Realtime Ready`.
-  2. **Create & Join Room on Vercel**: Clicking **Create Room** dispatches `room:create`. If native WebSockets are unavailable on Vercel Serverless, the transport transparently routes through `POST /api/rpc`, creates the 4-letter room, and enters the Room Lobby.
-  3. **Full Gameplay & Companion Bots**: Adding AI/companion seats, toggling house rules, starting the match, playing cards, calling UNO, and viewing leaderboards all work identically with rich Web Audio sound FX and major milestone announcer callouts.
-- **Visual Identity & Theme**:
-  - Preserves the 60-30-10 emerald felt (`#0B2B26`), dark slate HUD (`#0F172A`), crisp white card faces, and unboxed inline metadata ticker in the center arena.
-
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Same-Origin API Resolution**:
-  - *Chosen Approach*: Use `process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin` with zero hardcoded third-party URLs.
-  - *Why*: Eliminates cross-origin failures and dead container links when deploying to Vercel or custom domains.
-- **Decision 2: Dual-Transport Client with Serverless State Continuity**:
-  - *Chosen Approach*: Attempt native Socket.IO first on local/custom socket hosts, and automatically switch to `/api/rpc` HTTP transport on Vercel (`.vercel.app`) or on Socket.IO `connect_error`. Include an HMAC-signed room state envelope so stateless serverless lambdas can recover room state even without Redis.
-  - *Why*: Vercel Serverless Functions do not support persistent WebSocket connections or sticky in-memory state across lambdas; hybrid `/api/rpc` + signed state continuity makes standalone Vercel deployments rock-solid.
-
----
-
-## 4. Technical Architecture & Data Strategy
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                   CardClash Client (Browser / PWA)                   │
-├──────────────────────────────────────────────────────────────────────┤
-│  1. Session Auth: POST /api/session/guest (Same-Origin on Vercel)    │
-│  2. Realtime Transport Adapter:                                      │
-│     ├──► [Socket.IO Available] ──► Native WebSocket (server.ts)      │
-│     └──► [Vercel Serverless]   ──► HTTP RPC + Poll (POST /api/rpc)   │
-└──────────────────────────────────┬───────────────────────────────────┘
-                                   │
-                                   ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│              Next.js App Router API (/api/rpc/route.ts)              │
-├──────────────────────────────────────────────────────────────────────┤
-│  • Verifies HMAC Session Token                                       │
-│  • Executes Authoritative RoomManager & @cardclash/engine            │
-│  • Executes Server Bot Turns & Turn Timeouts                         │
-│  • Persists to Redis / Global Memory + HMAC Continuity Envelope      │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### Interactive Component & State Mapping
-- **Client Transport Adapter**: Implements the `Socket`-compatible interface (`on`, `emit`, `disconnect`, `connected`) so `CardClashApp` requires zero UI changes and all existing Socket.IO event listeners (`ROOM_STATE`, `GAME_VIEW`, `GAME_EVENTS`, `CHAT_HISTORY`, `CHAT_MESSAGE`, `REACTION_BURST`, `ERROR_EVENT`) work identically across both transports.
-- **Serverless RPC Handler**: Processes all client intents through the exact same `RoomManager` and `@cardclash/engine` reducer used by `createCardClashServer`, ensuring 100% rule parity and security.
+4. **Native PWA User Experience Optimizations (Touch, Scroll, & Gesture Overrides)**:
+   - **Anti-Zooming**: Configure Next.js layout viewport settings in `/app/layout.tsx` to lock initial/maximum scales to `1.0` and set `user-scalable=no` with `viewport-fit=cover` to block input focus and double-tap zoom triggers.
+   - **Suppress Pull-to-Refresh & Bounce**: Add global CSS overrides to `/app/globals.css` with `overscroll-behavior: none` and `overscroll-behavior-y: none` to disable vertical elastic refresh and body scroll bounces.
+   - **Remove Highlights & Selection**: Apply `-webkit-tap-highlight-color: transparent` globally to eliminate grey touch rects, and set `-webkit-user-select: none; user-select: none;` on all interactive buttons and cards to avoid text selection triggers during rapid actions.

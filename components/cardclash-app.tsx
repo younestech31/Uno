@@ -98,108 +98,167 @@ function playSynthesizedFx(
         .webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
     const now = ctx.currentTime;
+
+    const playNode = (oscType: OscillatorType, freq: number, startOffset: number, duration: number, startVol: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = oscType;
+      osc.frequency.setValueAtTime(freq, now + startOffset);
+      gain.gain.setValueAtTime(startVol, now + startOffset);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + startOffset + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + startOffset);
+      osc.stop(now + startOffset + duration);
+    };
+
     if (kind === 'play') {
-      // Color-pitched card snap
+      // 1. Core clean color-pitched musical tone
       const baseFreq =
         color === 'RED'
-          ? 580
+          ? 523.25 // C5
           : color === 'BLUE'
-            ? 440
+            ? 587.33 // D5
             : color === 'GREEN'
-              ? 520
+              ? 659.25 // E5
               : color === 'YELLOW'
-                ? 620
-                : 700;
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(baseFreq, now);
-      osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, now + 0.08);
-      gain.gain.setValueAtTime(0.14, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-      osc.start(now);
-      osc.stop(now + 0.09);
+                ? 783.99 // G5
+                : 880.00; // A5 (WILD)
+      playNode('triangle', baseFreq, 0, 0.12, 0.12);
+
+      // 2. Secondary highly-damped low-frequency tactile cardboard clack
+      const snapOsc = ctx.createOscillator();
+      const snapGain = ctx.createGain();
+      snapOsc.type = 'sawtooth';
+      snapOsc.frequency.setValueAtTime(100, now);
+      snapOsc.frequency.exponentialRampToValueAtTime(40, now + 0.04);
+      snapGain.gain.setValueAtTime(0.18, now);
+      snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      snapOsc.connect(snapGain);
+      snapGain.connect(ctx.destination);
+      snapOsc.start(now);
+      snapOsc.stop(now + 0.04);
+
     } else if (kind === 'draw') {
-      // Smooth deck draw rustle
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(340, now);
-      osc.frequency.exponentialRampToValueAtTime(200, now + 0.1);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
-      osc.start(now);
-      osc.stop(now + 0.11);
+      // Twin detuned smooth sine waves sweeping up (slick/swoosh card slide)
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc2.type = 'sine';
+
+      osc1.frequency.setValueAtTime(320, now);
+      osc1.frequency.exponentialRampToValueAtTime(680, now + 0.12);
+
+      osc2.frequency.setValueAtTime(335, now);
+      osc2.frequency.exponentialRampToValueAtTime(705, now + 0.12);
+
+      gainNode.gain.setValueAtTime(0.14, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+
+      osc1.connect(gainNode);
+      osc2.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 0.13);
+      osc2.stop(now + 0.13);
+
     } else if (kind === 'yourTurn') {
-      // Energetic 'Your Turn!' wake-up ping (C5 -> G5)
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(523.25, now);
-      osc.frequency.setValueAtTime(783.99, now + 0.08);
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-      osc.start(now);
-      osc.stop(now + 0.22);
+      // Uplifting arpeggiated E-Major triad (E5 -> G#5 -> B5 -> E6)
+      playNode('sine', 659.25, 0, 0.22, 0.08);       // E5
+      playNode('sine', 830.61, 0.04, 0.22, 0.08);    // G#5
+      playNode('sine', 987.77, 0.08, 0.22, 0.08);    // B5
+      playNode('sine', 1318.51, 0.12, 0.26, 0.08);   // E6
+
     } else if (kind === 'timerTick') {
-      // Urgent woodblock timer tick
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(800, now);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-      osc.start(now);
-      osc.stop(now + 0.05);
+      playNode('sine', 880, 0, 0.05, 0.08);
+
     } else if (kind === 'uno') {
-      // Punchy dual chime (D5 -> A5)
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(587.33, now);
-      osc.frequency.setValueAtTime(880, now + 0.08);
-      gain.gain.setValueAtTime(0.16, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
-      osc.start(now);
-      osc.stop(now + 0.26);
+      // Detuned brassy unison chord (C5 & G5 simultaneously) with sweep vibration
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      osc1.type = 'triangle';
+      osc2.type = 'sawtooth';
+
+      osc1.frequency.setValueAtTime(523.25, now); // C5
+      osc1.frequency.linearRampToValueAtTime(535, now + 0.22);
+
+      osc2.frequency.setValueAtTime(783.99, now); // G5
+      osc2.frequency.linearRampToValueAtTime(790, now + 0.22);
+
+      gainNode.gain.setValueAtTime(0.14, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+
+      osc1.connect(gainNode);
+      osc2.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 0.24);
+      osc2.stop(now + 0.24);
+
     } else if (kind === 'wild') {
-      // Ascending wild chord sweep
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(400, now);
-      osc.frequency.exponentialRampToValueAtTime(900, now + 0.15);
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-      osc.start(now);
-      osc.stop(now + 0.22);
+      // Cybernetic ascending sweep chord
+      playNode('sine', 400, 0, 0.24, 0.10);
+      playNode('sine', 600, 0.04, 0.24, 0.10);
+      playNode('sine', 900, 0.08, 0.24, 0.10);
+
     } else if (kind === 'swap') {
-      // Swirl action chord for 7-0 swap or challenge
+      // Swirling FM-like digital laser sound
+      const osc = ctx.createOscillator();
+      const gainNode = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(350, now);
-      osc.frequency.linearRampToValueAtTime(700, now + 0.12);
-      osc.frequency.linearRampToValueAtTime(520, now + 0.2);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+      osc.frequency.setValueAtTime(320, now);
+      osc.frequency.linearRampToValueAtTime(800, now + 0.10);
+      osc.frequency.linearRampToValueAtTime(440, now + 0.22);
+      gainNode.gain.setValueAtTime(0.12, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+      osc.connect(gainNode);
+      gainNode.connect(ctx.destination);
       osc.start(now);
-      osc.stop(now + 0.22);
+      osc.stop(now + 0.24);
+
     } else if (kind === 'win') {
-      // High-energy 5-note victory fanfare (C5 -> E5 -> G5 -> C6 -> E6)
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(523.25, now); // C5
-      osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
-      osc.frequency.setValueAtTime(783.99, now + 0.16); // G5
-      osc.frequency.setValueAtTime(1046.5, now + 0.24); // C6
-      osc.frequency.setValueAtTime(1318.5, now + 0.32); // E6
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-      osc.start(now);
-      osc.stop(now + 0.5);
+      // Polyphonic major-7th victory arpeggio cascade
+      playNode('triangle', 523.25, 0, 0.35, 0.08);    // C5
+      playNode('triangle', 659.25, 0.05, 0.35, 0.08);   // E5
+      playNode('triangle', 783.99, 0.10, 0.35, 0.08);   // G5
+      playNode('triangle', 987.77, 0.15, 0.35, 0.08);   // B5
+      playNode('triangle', 1046.50, 0.20, 0.40, 0.08);  // C6
+      playNode('triangle', 1318.51, 0.25, 0.45, 0.08);  // E6
+
     } else {
-      // Low warning buzz for errors
+      // Analog synth warning buzz for invalid moves
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gainNode = ctx.createGain();
+
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(180, now);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.frequency.setValueAtTime(140, now);
+      
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(400, now);
+      filter.frequency.exponentialRampToValueAtTime(50, now + 0.14);
+
+      gainNode.gain.setValueAtTime(0.12, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+      osc.connect(filter);
+      filter.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
       osc.start(now);
       osc.stop(now + 0.15);
     }
   } catch {
-    // Ignore audio context errors when autoplay is blocked
+    // Ignore audio failures if browser blocked autoplay
   }
 }
 
@@ -1017,7 +1076,7 @@ export default function CardClashApp() {
         } else {
           dispatchActionForSeat(seatId, { type: 'DRAW_CARD' });
         }
-      }, 650);
+      }, 400);
 
       return () => clearTimeout(timer);
     }

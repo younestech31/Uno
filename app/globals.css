@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+html, body {
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+}
+
+button, input, select, textarea, [role="button"], a {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}

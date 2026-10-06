@@ -217,7 +217,28 @@ export function CardTableView({
   if (view.houseRules.wildDrawFourChallenge) enabledRulesList.push('+4 Challenge');
 
   return (
-    <div className="min-h-screen w-full bg-[#0B2B26] text-stone-100 flex flex-col justify-between select-none overflow-x-hidden">
+    <div className="min-h-screen w-full bg-[#0B2B26] text-stone-100 flex flex-col justify-between select-none overflow-x-hidden relative">
+      {/* Ambient Full-Screen Viewport Flash Overlay */}
+      <motion.div
+        key={`flash-${view.topDiscard.id}`}
+        initial={{ opacity: 0.16 }}
+        animate={{ opacity: 0 }}
+        transition={{ duration: 0.45, ease: 'easeOut' }}
+        className={`pointer-events-none fixed inset-0 z-10 ${
+          view.topDiscard.color === 'RED'
+            ? 'bg-rose-500'
+            : view.topDiscard.color === 'BLUE'
+              ? 'bg-blue-500'
+              : view.topDiscard.color === 'YELLOW'
+                ? 'bg-amber-400'
+                : view.topDiscard.color === 'GREEN'
+                  ? 'bg-emerald-500'
+                  : view.topDiscard.kind === 'WILD_DRAW_FOUR'
+                    ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-orange-500'
+                    : 'bg-indigo-500'
+        }`}
+      />
+
       {/* Top Table HUD Bar */}
       <header className="w-full border-b border-white/10 bg-[#09221E]/90 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
@@ -361,10 +382,10 @@ export function CardTableView({
                 </div>
               </div>
 
-              {/* Fanned Mini Card Backs */}
-              <div className="flex -space-x-4 pl-1">
-                {Array.from({ length: Math.min(opp.cardCount, 5) }).map((_, i) => (
-                  <div key={i} className="transform scale-60 -my-2 origin-left">
+              {/* Fanned Mini Card Backs (max 3 overlapping cards with tight overlay to prevent clipping on mobile) */}
+              <div className="flex -space-x-5 pl-1.5 shrink-0">
+                {Array.from({ length: Math.min(opp.cardCount, 3) }).map((_, i) => (
+                  <div key={i} className="transform scale-55 -my-2 origin-left">
                     <CardBackGraphic />
                   </div>
                 ))}
@@ -426,7 +447,7 @@ export function CardTableView({
         <div className="flex items-center gap-6 sm:gap-10">
           {/* Draw Deck */}
           <div className="flex flex-col items-center gap-2">
-            <button
+            <motion.button
               type="button"
               disabled={!canDrawNow}
               onClick={() => {
@@ -434,9 +455,22 @@ export function CardTableView({
                   onDispatchAction({ type: 'DRAW_CARD' });
                 }
               }}
+              animate={canDrawNow ? {
+                scale: [1, 1.04, 1],
+                boxShadow: [
+                  "0px 0px 0px 0px rgba(16, 185, 129, 0)",
+                  "0px 0px 14px 4px rgba(16, 185, 129, 0.4)",
+                  "0px 0px 0px 0px rgba(16, 185, 129, 0)"
+                ]
+              } : {}}
+              transition={canDrawNow ? {
+                duration: 1.8,
+                repeat: Infinity,
+                ease: "easeInOut"
+              } : {}}
               className={`relative transform transition-all active:scale-95 ${
                 canDrawNow
-                  ? 'cursor-pointer hover:-translate-y-1 ring-2 ring-emerald-400 shadow-xl shadow-emerald-500/20'
+                  ? 'cursor-pointer ring-2 ring-emerald-400 shadow-xl'
                   : 'opacity-80 cursor-not-allowed'
               }`}
             >
@@ -446,7 +480,7 @@ export function CardTableView({
                   {view.drawPileCount}
                 </span>
               </div>
-            </button>
+            </motion.button>
             <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider">
               {canDrawNow ? 'Tap to Draw' : 'Draw Deck'}
             </span>
@@ -454,7 +488,13 @@ export function CardTableView({
 
           {/* Active Discard Pile */}
           <div className="flex flex-col items-center gap-2">
-            <div className="relative transform hover:rotate-1 transition-transform">
+            <motion.div
+              key={view.topDiscard.id}
+              initial={{ scale: 0.65, rotate: -20, y: -15, opacity: 0.5 }}
+              animate={{ scale: 1, rotate: 0, y: 0, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 240, damping: 14 }}
+              className="relative transform hover:rotate-1 transition-transform"
+            >
               <CardGraphic card={view.topDiscard} />
 
               {/* Active Suit Color Ring / Floating Badge */}
@@ -466,7 +506,7 @@ export function CardTableView({
                   <span>{activeSuitMeta.label}</span>
                 </div>
               )}
-            </div>
+            </motion.div>
             <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider">
               Discard Pile
             </span>
