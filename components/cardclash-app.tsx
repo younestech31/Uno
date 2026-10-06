@@ -677,9 +677,10 @@ export default function CardClashApp() {
         registerSocketListeners(socket, creds, true);
         void refreshLeaderboardAndHistory();
       })
-      .catch(() => {
+      .catch((err) => {
         if (mounted) {
-          pushToast('Could not initialize session token', 'error');
+          console.error('[CardClash] Session initialization failed:', err);
+          pushToast(`Session Error: ${err instanceof Error ? err.message : String(err)}`, 'error');
         }
       });
 
