@@ -145,6 +145,25 @@ export function createCardClashServer(
   const httpServer =
     options?.httpServer ??
     http.createServer((req, res) => {
+      const origin = req.headers.origin;
+      
+      // Handle CORS Preflight OPTIONS requests
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': origin || '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Max-Age': '86400',
+        });
+        res.end();
+        return;
+      }
+
+      // Add default CORS headers for all API requests
+      res.setHeader('Access-Control-Allow-Origin', origin || '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
