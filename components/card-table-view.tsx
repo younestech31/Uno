@@ -37,6 +37,7 @@ import {
   WildColorPickerModal,
   type PendingWildSelection,
 } from './table-modals';
+import { PWAInstallButton } from './pwa-install-button';
 
 export interface CompanionSeatInfo {
   readonly playerId: string;
@@ -322,6 +323,8 @@ export function CardTableView({
             </button>
           )}
 
+          <PWAInstallButton />
+
           <button
             type="button"
             onClick={onToggleSound}
@@ -346,54 +349,167 @@ export function CardTableView({
         </div>
       </header>
 
-      {/* Opponents Ribbon */}
-      <section className="w-full px-3 py-2 sm:py-3 flex items-center justify-center gap-3 sm:gap-6 flex-wrap">
-        {view.opponents.map((opp) => {
+      {/* Opponents Arena: 1v1 Mirrored Full Fanned Deck vs 3+ Player Adaptive Tabletop Fans */}
+      {view.opponents.length === 1 ? (
+        (() => {
+          const opp = view.opponents[0]!;
           const isOppTurn = opp.id === view.currentPlayerId;
+          const visibleCount = Math.min(opp.cardCount, 14);
+          const extraCount = Math.max(0, opp.cardCount - visibleCount);
+          const angleStep = visibleCount > 10 ? 1.8 : visibleCount > 7 ? 2.4 : 3;
+          const overlapClass =
+            visibleCount > 10
+              ? '-space-x-11 sm:-space-x-10'
+              : visibleCount > 7
+                ? '-space-x-9 sm:-space-x-8'
+                : '-space-x-7 sm:-space-x-6';
+
           return (
-            <div
-              key={opp.id}
-              className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all ${
-                isOppTurn
-                  ? 'bg-amber-500/20 border-amber-400/60 shadow-lg scale-105'
-                  : 'bg-slate-900/60 border-white/10'
-              }`}
-            >
-              <div className="flex flex-col">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-semibold text-stone-100 truncate max-w-[100px] sm:max-w-[140px]">
-                    {opp.name}
-                  </span>
-                  {!opp.connected && (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-mono">
-                      OFFLINE
+            <section className="w-full border-b border-white/10 bg-[#09221E]/75 px-3 sm:px-6 pt-2.5 pb-3 flex flex-col items-center gap-2">
+              {/* 1v1 Opponent Status Header (mirrors player footer toolbar) */}
+              <div className="flex items-center justify-between gap-3 w-full max-w-4xl">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`px-3 py-1 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all ${
+                      isOppTurn
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md shadow-amber-500/10'
+                        : 'bg-slate-900/70 border-white/10 text-stone-200'
+                    }`}
+                  >
+                    <span className="truncate max-w-[140px] sm:max-w-[200px]">
+                      {opp.name}
                     </span>
-                  )}
-                  {opp.calledUno && (
-                    <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-amber-500 text-slate-950">
-                      UNO!
-                    </span>
-                  )}
+                    {isOppTurn && (
+                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-black">
+                        Thinking
+                      </span>
+                    )}
+                    {!opp.connected && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono">
+                        OFFLINE
+                      </span>
+                    )}
+                    {opp.calledUno && (
+                      <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 animate-bounce">
+                        UNO!
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-stone-400 font-mono tabular-nums mt-0.5">
-                  <span>{opp.cardCount} cards</span>
+
+                <div className="flex items-center gap-2 text-xs text-stone-300 font-mono tabular-nums">
+                  <span>Opponent Hand: {opp.cardCount} cards</span>
                   <span aria-hidden="true">·</span>
-                  <span>{opp.score} pts</span>
+                  <span className="text-emerald-300 font-semibold">{opp.score} pts</span>
                 </div>
               </div>
 
-              {/* Fanned Mini Card Backs (max 3 overlapping cards with tight overlay to prevent clipping on mobile) */}
-              <div className="flex -space-x-5 pl-1.5 shrink-0">
-                {Array.from({ length: Math.min(opp.cardCount, 3) }).map((_, i) => (
-                  <div key={i} className="transform scale-55 -my-2 origin-left">
-                    <CardBackGraphic />
-                  </div>
-                ))}
+              {/* 1v1 Mirrored Fanned Card-Back Deck */}
+              <div className="w-full overflow-x-auto pt-1 pb-2 flex items-center justify-center">
+                <div className={`flex ${overlapClass} px-6 py-1.5 items-center justify-center min-w-max`}>
+                  {Array.from({ length: visibleCount }).map((_, index) => {
+                    const offsetFromCenter = index - (visibleCount - 1) / 2;
+                    const rotationDeg = offsetFromCenter * -angleStep;
+                    const archY = Math.abs(offsetFromCenter) * -1.5;
+                    return (
+                      <motion.div
+                        key={`opp-1v1-card-${index}`}
+                        initial={{ opacity: 0, y: -16, scale: 0.8 }}
+                        animate={{ opacity: 1, y: archY, scale: 0.88 }}
+                        transition={{ duration: 0.18 }}
+                        style={{ transform: `translateY(${archY}px) rotate(${rotationDeg}deg)` }}
+                        className="origin-top transition-transform duration-150 drop-shadow-md"
+                      >
+                        <CardBackGraphic />
+                      </motion.div>
+                    );
+                  })}
+                  {extraCount > 0 && (
+                    <div className="ml-3 px-2.5 py-1 rounded-full bg-slate-950/90 border border-amber-400/40 text-amber-300 font-mono text-xs font-bold shadow-lg">
+                      +{extraCount}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            </section>
           );
-        })}
-      </section>
+        })()
+      ) : (
+        <section className="w-full px-3 pt-2.5 pb-1 flex items-start justify-center gap-3 sm:gap-6 flex-wrap">
+          {view.opponents.map((opp) => {
+            const isOppTurn = opp.id === view.currentPlayerId;
+            const visibleCount = Math.min(opp.cardCount, 8);
+            const extraCount = Math.max(0, opp.cardCount - visibleCount);
+            const angleStep = visibleCount > 5 ? 3.2 : 4.2;
+            const overlapClass =
+              visibleCount > 5 ? '-space-x-12' : '-space-x-10';
+
+            return (
+              <div
+                key={opp.id}
+                className={`flex flex-col items-center px-3.5 pt-2 pb-2.5 rounded-2xl border transition-all min-w-[148px] sm:min-w-[172px] ${
+                  isOppTurn
+                    ? 'bg-amber-500/15 border-amber-400/70 shadow-lg shadow-amber-500/10 scale-[1.03]'
+                    : 'bg-slate-950/65 border-white/10'
+                }`}
+              >
+                {/* Opponent Info Header */}
+                <div className="flex items-center justify-between gap-2 w-full mb-1">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-xs font-bold text-stone-100 truncate max-w-[96px] sm:max-w-[120px]">
+                      {opp.name}
+                    </span>
+                    {!opp.connected && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono">
+                        OFF
+                      </span>
+                    )}
+                    {opp.calledUno && (
+                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 animate-bounce">
+                        UNO!
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-mono tabular-nums text-emerald-300 font-semibold shrink-0">
+                    {opp.score}p
+                  </span>
+                </div>
+
+                {/* Compact Curved Fanned Card-Back Deck */}
+                <div className="relative flex items-center justify-center h-14 sm:h-16 w-full overflow-visible my-0.5">
+                  <div className={`flex ${overlapClass} items-center justify-center`}>
+                    {Array.from({ length: visibleCount }).map((_, idx) => {
+                      const offset = idx - (visibleCount - 1) / 2;
+                      const deg = offset * -angleStep;
+                      const archY = Math.abs(offset) * -1.2;
+                      return (
+                        <div
+                          key={`opp-${opp.id}-card-${idx}`}
+                          style={{
+                            transform: `translateY(${archY}px) rotate(${deg}deg) scale(0.54)`,
+                          }}
+                          className="origin-center -my-6 transition-transform duration-150 drop-shadow-sm"
+                        >
+                          <CardBackGraphic />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {extraCount > 0 && (
+                    <span className="absolute -right-1 bottom-0 px-1.5 py-0.5 rounded-full bg-slate-950/90 border border-amber-400/40 text-amber-300 font-mono text-[10px] font-bold">
+                      +{extraCount}
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[10px] text-stone-300 font-mono tabular-nums mt-0.5">
+                  {opp.cardCount} {opp.cardCount === 1 ? 'card' : 'cards'}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      )}
 
       {/* Main Table Arena */}
       <main className="flex-1 flex flex-col items-center justify-center p-3 relative">
@@ -589,10 +705,20 @@ export function CardTableView({
 
         {/* Fanned Player Hand Container */}
         <div className="w-full overflow-x-auto pb-1 flex items-center justify-center">
-          <div className="flex -space-x-6 sm:-space-x-8 px-4 py-2 min-w-max">
+          <div
+            className={`flex ${
+              view.hand.length > 12
+                ? '-space-x-10 sm:-space-x-10'
+                : view.hand.length > 8
+                  ? '-space-x-8 sm:-space-x-9'
+                  : '-space-x-6 sm:-space-x-8'
+            } px-6 py-2 min-w-max`}
+          >
             {view.hand.map((card, index) => {
               const playable = playableCardIds.has(card.id);
-              const rotationDeg = (index - (view.hand.length - 1) / 2) * 3;
+              const angleStep =
+                view.hand.length > 12 ? 1.5 : view.hand.length > 8 ? 2.2 : 3;
+              const rotationDeg = (index - (view.hand.length - 1) / 2) * angleStep;
               return (
                 <motion.div
                   key={card.id}

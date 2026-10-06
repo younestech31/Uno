@@ -1,23 +1,30 @@
-# Comprehensive Gameplay, Sound, VFX, & PWA Tuning Plan
+# Standalone PWA & Adaptive Opponent Fanned Hand Plan
 
-Implement high-fidelity gameplay upgrades, modern arcade-style sound chimes, dynamic card play visual effects, and professional native app-like mobile gesture optimizations for the Progressive Web App (PWA):
+Configure CardClash so that:
+1. In **1 vs 1 mode**, the opponent's hand at the top of the table renders as a **full fanned hand of card backs** mirroring your own deck at the bottom, with adaptive overlap so even large hands fit cleanly on screen.
+2. In **3+ Player mode**, opponents are arranged around the top table perimeter with **compact curved mini-fans of card backs** that dynamically tighten their overlap based on card count.
+3. The **PWA installs and launches in true `standalone` mode** (WebAPK on Android Chrome / standalone on iOS Safari) with zero browser navigation/URL bar.
 
-1. **High-Fidelity Audio Upgrades (Modern Arcade & Card Snaps)**:
-   - **Card Play Sound with Physical Snap ('play')**: Upgrade the Web Audio synthesizer in `/components/cardclash-app.tsx` to use **polyphonic dual oscillators**. Oscillator 1 plays a clean triangle wave tuned to the card's color (C5 for Red, E5 for Blue, G5 for Yellow, C6 for Green). Oscillator 2 plays a highly-damped, low-frequency sawtooth wave (100Hz down to 40Hz) over 0.05 seconds, simulating the physical tactile "snap/clack" of cardboard.
-   - **Rich Draw Card Sweep ('draw')**: Generate a detuned dual-frequency ascending sweep (Oscillator 1: 300Hz -> 700Hz, Oscillator 2: 315Hz -> 730Hz) simulating a smooth "slick/swoosh" drawing movement.
-   - **Warm "Your Turn" Major Chord Chime ('yourTurn')**: Arpeggiate an uplifting E-Major electronic bell chime (E5 -> G#5 -> B5 -> E6) using multiple sine waves to grab attention elegantly.
-   - **Brassy UNO Synth sweep ('uno')**: Trigger a fat, dual-tone brassy synth chord (C5 + G5 simultaneously) with an LFO-like frequency vibration sweep.
-   - **Uplifting Victory Fanfare ('win')**: Play an arpeggiated, upward-moving Major-7th arpeggio (C5 -> E5 -> G5 -> B5 -> C6 -> E6 -> G6) in rapid arcade style.
+---
 
-2. **Dynamic Visual Effects (Flashes, Bounces, & Slick Moves)**:
-   - **Background Screen Flash Pulse**: In `/components/card-table-view.tsx`, watch for changes in `view.topDiscard.id`. When a card is played, trigger a brief (450ms) full-viewport background glow or screen-border gradient flash matching the played card color (Red, Blue, Yellow, Green, or Purple/Gold for Wild cards), rendering a beautiful ambient lightning flash that fades out.
-   - **Discard Card-Play Bounce**: Bind a `motion.div` wrapper around the discard pile card graphic. When `view.topDiscard.id` changes, use spring-physics scale/rotate animations to make the new card bounce onto the pile with a tactile, heavy, physical settling effect.
-   - **Draw Deck Interaction**: Add a gentle breathing/pulsing animation to the draw deck when `canDrawNow` is active, inviting player touch with a clean visual affordance.
+## Proposed Changes
 
-3. **Compact Opponent Card Deck Styling**:
-   - Restructure the opponent card deck display inside `/components/card-table-view.tsx` to display **at most 3 closely overlapping card backs** using a tight `-space-x-5` layout with `shrink-0` bounds to prevent UI wrapping/layout breaking on mobile viewports.
+### 1. Adaptive Opponent Hand Rendering (`components/card-table-view.tsx`)
+- **1 vs 1 Mode (`view.opponents.length === 1`)**:
+  - Render the single opponent directly across the top of the table with a mirrored fanned hand of `CardBackGraphic` cards (up to 14 visible cards in a smooth inverted arc `(index - (count - 1) / 2) * -2.5deg`).
+  - Dynamically calculate horizontal overlap (`marginLeft`) based on card count so that whether the opponent holds 2 cards or 20 cards, the fanned deck stays centered and never overflows or clips off-screen.
+  - Display the opponent's status bar (Name, Card Count badge, Score, UNO! alert, Turn glow) cleanly docked above their fanned hand, mirroring the player's bottom HUD.
+- **Multi-Player Mode (`view.opponents.length >= 2`)**:
+  - Arrange opponents in a responsive tabletop arc across the top arena.
+  - Give each opponent a tactile curved mini-fan of `CardBackGraphic` cards (up to 8 visible cards scaled to `0.65x`–`0.75x`) with adaptive overlap and subtle fan rotation so every seat visibly holds a real fanned hand of card backs without crowding the table.
+- **Player's Own Bottom Hand (`view.hand`)**:
+  - Also apply adaptive overlap and fan-angle clamping when the player holds many cards (e.g., 10+ cards) so the player's own hand stays centered and comfortable to tap on mobile screens.
 
-4. **Native PWA User Experience Optimizations (Touch, Scroll, & Gesture Overrides)**:
-   - **Anti-Zooming**: Configure Next.js layout viewport settings in `/app/layout.tsx` to lock initial/maximum scales to `1.0` and set `user-scalable=no` with `viewport-fit=cover` to block input focus and double-tap zoom triggers.
-   - **Suppress Pull-to-Refresh & Bounce**: Add global CSS overrides to `/app/globals.css` with `overscroll-behavior: none` and `overscroll-behavior-y: none` to disable vertical elastic refresh and body scroll bounces.
-   - **Remove Highlights & Selection**: Apply `-webkit-tap-highlight-color: transparent` globally to eliminate grey touch rects, and set `-webkit-user-select: none; user-select: none;` on all interactive buttons and cards to avoid text selection triggers during rapid actions.
+### 2. True Standalone PWA — No Chrome Navigation Bar (`public/`, `app/manifest.ts`, `app/layout.tsx`, `lib/usePWAInstall.ts`)
+- **Generate Valid PNG & SVG Icons in `public/`**:
+  - Create `public/icon-192.png` (`192x192`), `public/icon-512.png` (`512x512`), `public/icon-maskable.png` (`512x512` maskable with safe-zone margin), `public/apple-touch-icon.png` (`180x180`), and `public/icon.svg`. Fixing these missing icons prevents Chrome from downgrading the home-screen app to a browser shortcut with an address bar.
+- **Active Service Worker (`public/sw.js`)**:
+  - Create `public/sw.js` with `install`, `activate`, and `fetch` listeners and register it automatically in `usePWAInstall()` so Android Chrome compiles a true standalone WebAPK.
+- **Standalone Manifest & Meta Tags**:
+  - Set `display: 'standalone'`, `display_override: ['standalone', 'fullscreen']`, `orientation: 'any'`, `background_color: '#0B2B26'`, and `theme_color: '#0B2B26'` in `app/manifest.ts`.
+  - Add `themeColor: '#0B2B26'`, `manifest: '/manifest.webmanifest'`, `appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'CardClash' }`, and `other: { 'mobile-web-app-capable': 'yes' }` in `app/layout.tsx`.

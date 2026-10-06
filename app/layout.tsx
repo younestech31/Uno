@@ -3,6 +3,8 @@ import { Syne, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 
 export const viewport: Viewport = {
+  themeColor: '#0B2B26',
+  colorScheme: 'dark',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
@@ -32,6 +34,28 @@ export const metadata: Metadata = {
   title: 'CardClash',
   description:
     'Real-time multiplayer UNO-style shedding card game built with an authoritative deterministic TypeScript engine.',
+  manifest: '/manifest.webmanifest',
+  applicationName: 'CardClash',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'CardClash',
+  },
+  formatDetection: {
+    telephone: false,
+  },
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
+  other: {
+    'mobile-web-app-capable': 'yes',
+    'apple-mobile-web-app-capable': 'yes',
+  },
   openGraph: {
     title: 'CardClash',
     description:
@@ -56,7 +80,7 @@ export default function RootLayout({
       lang="en"
       className={`${syne.variable} ${plusJakarta.variable} ${jetbrainsMono.variable}`}
     >
-      <body className="font-sans antialiased" suppressHydrationWarning>
+      <body className="font-sans antialiased bg-[#0B2B26] text-stone-100" suppressHydrationWarning>
         {children}
       </body>
     </html>

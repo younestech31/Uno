@@ -15,10 +15,23 @@ export function usePWAInstall() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // Detect standalone mode (already installed)
+    // Register Service Worker so Chrome/Android compiles a true standalone WebAPK (no URL bar)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/sw.js', { scope: '/' })
+        .catch(() => {
+          // Ignore registration errors in restricted preview frames
+        });
+    }
+
+    // Detect standalone mode (already installed and running without browser bar)
+    const mediaQuery = window.matchMedia('(display-mode: standalone)');
+    const isFullscreen = window.matchMedia('(display-mode: fullscreen)').matches;
     const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
+      mediaQuery.matches ||
+      isFullscreen ||
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+
     // Detect iOS devices
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
@@ -27,6 +40,10 @@ export function usePWAInstall() {
       setIsInstalled(isStandalone);
       setIsIOS(isIOSDevice);
     }, 0);
+
+    const handleDisplayModeChange = (e: MediaQueryListEvent) => {
+      setIsInstalled(e.matches);
+    };
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -38,10 +55,12 @@ export function usePWAInstall() {
       setDeferredPrompt(null);
     };
 
+    mediaQuery.addEventListener?.('change', handleDisplayModeChange);
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
+      mediaQuery.removeEventListener?.('change', handleDisplayModeChange);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
