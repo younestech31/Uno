@@ -96,11 +96,33 @@ export function CardTableView({
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const handScrollRef = React.useRef<HTMLDivElement>(null);
 
-  const scrollHand = (direction: 'left' | 'right') => {
-    if (handScrollRef.current) {
-      const scrollAmount = direction === 'left' ? -280 : 280;
-      handScrollRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+  // Pure smooth drag/slide state for buttonless hand navigation
+  const [isPointerDown, setIsPointerDown] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [initialScrollLeft, setInitialScrollLeft] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!handScrollRef.current) return;
+    setIsPointerDown(true);
+    setIsDragging(false);
+    setStartX(e.clientX - handScrollRef.current.offsetLeft);
+    setInitialScrollLeft(handScrollRef.current.scrollLeft);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isPointerDown || !handScrollRef.current) return;
+    const x = e.clientX - handScrollRef.current.offsetLeft;
+    const walk = (x - startX) * 1.5;
+    if (Math.abs(walk) > 5) {
+      setIsDragging(true);
     }
+    handScrollRef.current.scrollLeft = initialScrollLeft - walk;
+  };
+
+  const handlePointerUpOrLeave = () => {
+    setIsPointerDown(false);
+    setTimeout(() => setIsDragging(false), 50);
   };
 
   const handleHandWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -204,6 +226,7 @@ export function CardTableView({
   };
 
   const handleCardClick = (card: Card) => {
+    if (isDragging) return;
     if (isSpectator || view.eliminated) return;
     if (!playableCardIds.has(card.id)) return;
 
@@ -821,39 +844,19 @@ export function CardTableView({
           </div>
         </div>
 
-        {/* Fanned Player Hand Container with Side Navigation & Generous Edge Padding */}
-        <div className="relative w-full group/hand">
-          {/* Left Scroll Navigation Button */}
-          {view.hand.length > 6 && (
-            <button
-              type="button"
-              aria-label="Scroll hand left"
-              onClick={() => scrollHand('left')}
-              className="absolute left-1 sm:left-2 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-2.5 rounded-full bg-slate-950/90 hover:bg-slate-900 border border-white/20 text-stone-200 shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer opacity-80 group-hover/hand:opacity-100"
-            >
-              <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
-            </button>
-          )}
-
-          {/* Right Scroll Navigation Button */}
-          {view.hand.length > 6 && (
-            <button
-              type="button"
-              aria-label="Scroll hand right"
-              onClick={() => scrollHand('right')}
-              className="absolute right-1 sm:right-2 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-2.5 rounded-full bg-slate-950/90 hover:bg-slate-900 border border-white/20 text-stone-200 shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer opacity-80 group-hover/hand:opacity-100"
-            >
-              <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
-            </button>
-          )}
-
+        {/* Buttonless, Scrollbar-Free Pure Sliding Player Hand Container */}
+        <div className="w-full relative touch-pan-x">
           <div
             ref={handScrollRef}
             onWheel={handleHandWheel}
-            className="w-full overflow-x-auto scroll-smooth overscroll-x-contain pb-2 pt-1 flex items-center justify-start sm:justify-center no-scrollbar"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUpOrLeave}
+            onPointerLeave={handlePointerUpOrLeave}
+            className="w-full overflow-x-auto overscroll-x-contain pb-3 pt-1 flex items-center justify-start sm:justify-center cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           >
-            {/* Generous Leading Spacer */}
-            <div className="w-8 sm:w-16 shrink-0" aria-hidden="true" />
+            {/* Generous Leading Spacer so first card is never clipped */}
+            <div className="w-10 sm:w-20 shrink-0" aria-hidden="true" />
 
             <div
               className={`flex ${
@@ -864,12 +867,12 @@ export function CardTableView({
                     : view.hand.length > 8
                       ? '-space-x-8 sm:-space-x-9'
                       : '-space-x-6 sm:-space-x-7'
-              } px-4 py-2 min-w-max items-center`}
+              } px-2 py-2 min-w-max items-center`}
             >
               {view.hand.map((card, index) => {
                 const playable = playableCardIds.has(card.id);
                 const angleStep =
-                  view.hand.length > 16 ? 1.0 : view.hand.length > 12 ? 1.5 : view.hand.length > 8 ? 2.2 : 3;
+                  view.hand.length > 16 ? 0.9 : view.hand.length > 12 ? 1.4 : view.hand.length > 8 ? 2.0 : 2.8;
                 const rotationDeg = (index - (view.hand.length - 1) / 2) * angleStep;
                 return (
                   <motion.div
@@ -889,8 +892,8 @@ export function CardTableView({
               })}
             </div>
 
-            {/* Generous Trailing Spacer to guarantee the last card is never clipped */}
-            <div className="w-12 sm:w-20 shrink-0" aria-hidden="true" />
+            {/* Generous Trailing Spacer so last card is never clipped */}
+            <div className="w-14 sm:w-28 shrink-0" aria-hidden="true" />
           </div>
         </div>
       </footer>
