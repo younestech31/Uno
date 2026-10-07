@@ -32,6 +32,7 @@ export function getPlayerView(state: GameState, playerId: string): PlayerView {
       score: opp.score,
       calledUno: opp.calledUno,
       connected: opp.connected,
+      eliminated: Boolean(opp.eliminated),
     });
   }
 
@@ -54,6 +55,7 @@ export function getPlayerView(state: GameState, playerId: string): PlayerView {
     pendingDrawnCardId:
       state.currentPlayerIndex === playerIndex ? state.pendingDrawnCardId : null,
     pendingDrawCount: state.pendingDrawCount,
+    pendingDrawKind: state.pendingDrawKind,
     unoVulnerablePlayerId: state.unoVulnerablePlayerId,
     lastSeq: state.lastSeqByPlayer[viewer.id] ?? 0,
     houseRules: { ...state.houseRules },
@@ -61,6 +63,7 @@ export function getPlayerView(state: GameState, playerId: string): PlayerView {
     roundWinnerId: state.roundWinnerId,
     matchWinnerId: state.matchWinnerId,
     revealedSeed: state.status === 'MATCH_OVER' ? state.seed : null,
+    eliminated: Boolean(viewer.eliminated),
   };
 }
 
@@ -86,6 +89,7 @@ export function getSpectatorView(
     score: p.score,
     calledUno: p.calledUno,
     connected: p.connected,
+    eliminated: Boolean(p.eliminated),
   }));
 
   const currentPlayer = state.players[state.currentPlayerIndex]!;
@@ -106,6 +110,7 @@ export function getSpectatorView(
     opponents,
     pendingDrawnCardId: null,
     pendingDrawCount: state.pendingDrawCount,
+    pendingDrawKind: state.pendingDrawKind,
     unoVulnerablePlayerId: state.unoVulnerablePlayerId,
     lastSeq: 0,
     houseRules: { ...state.houseRules },
@@ -113,5 +118,6 @@ export function getSpectatorView(
     roundWinnerId: state.roundWinnerId,
     matchWinnerId: state.matchWinnerId,
     revealedSeed: state.status === 'MATCH_OVER' ? state.seed : null,
+    eliminated: false,
   };
 }

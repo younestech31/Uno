@@ -73,12 +73,16 @@ function summarizeAction(
       return `${name} set starting suit to ${action.color}`;
     case 'CHOOSE_SWAP_TARGET':
       return `${name} swapped hands`;
+    case 'CHOOSE_ROULETTE_COLOR':
+      return `${name} spun roulette for ${action.color}`;
     case 'CHALLENGE_WILD_DRAW_FOUR':
       return `${name} challenged Wild +4`;
     case 'ACCEPT_WILD_DRAW_FOUR':
       return `${name} accepted Wild +4`;
     case 'START_NEXT_ROUND':
       return `${name} started next round`;
+    default:
+      return `${name} performed an action`;
   }
 }
 

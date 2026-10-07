@@ -142,11 +142,13 @@ export class RoomManager {
 
     const roomCode = await this.allocateUniqueRoomCode();
     const now = Date.now();
+    const isNoMercy = options?.houseRules?.gameMode === 'NO_MERCY';
     const houseRules: HouseRules = {
       ...DEFAULT_HOUSE_RULES,
+      ...(isNoMercy ? { gameMode: 'NO_MERCY' as const, stacking: true, sevenZeroSwap: true } : {}),
       ...options?.houseRules,
     };
-    const targetScore = options?.targetScore ?? 500;
+    const targetScore = options?.targetScore ?? (isNoMercy ? 1000 : 500);
     const maxPlayers = options?.maxPlayers ?? 4;
 
     const hostRecord: RoomPlayerRecord = {

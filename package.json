@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node server.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p packages/engine/tsconfig.json && tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p apps/server/tsconfig.json",
     "test": "vitest run",

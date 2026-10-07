@@ -3,13 +3,33 @@ export type CardColor = ColoredCardColor | 'WILD';
 
 export type NumberValue = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
-export type CardKind =
-  | 'NUMBER'
+export type GameMode = 'CLASSIC' | 'NO_MERCY';
+
+export type ColoredActionKind =
   | 'SKIP'
   | 'REVERSE'
   | 'DRAW_TWO'
+  | 'DRAW_FOUR'
+  | 'SKIP_ALL'
+  | 'DISCARD_ALL';
+
+export type WildCardKind =
   | 'WILD'
-  | 'WILD_DRAW_FOUR';
+  | 'WILD_DRAW_FOUR'
+  | 'WILD_REVERSE_DRAW_FOUR'
+  | 'WILD_DRAW_SIX'
+  | 'WILD_DRAW_TEN'
+  | 'WILD_COLOR_ROULETTE';
+
+export type CardKind = 'NUMBER' | ColoredActionKind | WildCardKind;
+
+export type DrawPenaltyKind =
+  | 'DRAW_TWO'
+  | 'DRAW_FOUR'
+  | 'WILD_DRAW_FOUR'
+  | 'WILD_REVERSE_DRAW_FOUR'
+  | 'WILD_DRAW_SIX'
+  | 'WILD_DRAW_TEN';
 
 export interface NumberCard {
   readonly id: string;
@@ -21,14 +41,14 @@ export interface NumberCard {
 export interface ColoredActionCard {
   readonly id: string;
   readonly color: ColoredCardColor;
-  readonly kind: 'SKIP' | 'REVERSE' | 'DRAW_TWO';
+  readonly kind: ColoredActionKind;
   readonly value: null;
 }
 
 export interface WildCard {
   readonly id: string;
   readonly color: 'WILD';
-  readonly kind: 'WILD' | 'WILD_DRAW_FOUR';
+  readonly kind: WildCardKind;
   readonly value: null;
 }
 
@@ -37,6 +57,7 @@ export type Card = NumberCard | ColoredActionCard | WildCard;
 export type PlayDirection = 1 | -1;
 
 export interface HouseRules {
+  readonly gameMode?: GameMode;
   readonly stacking: boolean;
   readonly sevenZeroSwap: boolean;
   readonly jumpIn: boolean;
@@ -44,8 +65,17 @@ export interface HouseRules {
 }
 
 export const DEFAULT_HOUSE_RULES: HouseRules = {
+  gameMode: 'CLASSIC',
   stacking: false,
   sevenZeroSwap: false,
+  jumpIn: false,
+  wildDrawFourChallenge: false,
+};
+
+export const NO_MERCY_HOUSE_RULES: HouseRules = {
+  gameMode: 'NO_MERCY',
+  stacking: true,
+  sevenZeroSwap: true,
   jumpIn: false,
   wildDrawFourChallenge: false,
 };
@@ -73,6 +103,7 @@ export interface PlayerState {
   readonly calledUno: boolean;
   readonly preCalledUno: boolean;
   readonly connected: boolean;
+  readonly eliminated?: boolean;
 }
 
 export type TurnPhase =
@@ -81,7 +112,8 @@ export type TurnPhase =
   | 'DRAWN_PLAY_OR_PASS'
   | 'STACK_OR_DRAW'
   | 'AWAITING_SWAP_TARGET'
-  | 'AWAITING_WD4_CHALLENGE';
+  | 'AWAITING_WD4_CHALLENGE'
+  | 'AWAITING_ROULETTE_COLOR';
 
 export type GameStatus = 'IN_PROGRESS' | 'ROUND_OVER' | 'MATCH_OVER';
 
@@ -114,7 +146,7 @@ export interface GameState {
   readonly currentColor: ColoredCardColor | null;
   readonly pendingDrawnCardId: string | null;
   readonly pendingDrawCount: number;
-  readonly pendingDrawKind: 'DRAW_TWO' | 'WILD_DRAW_FOUR' | null;
+  readonly pendingDrawKind: DrawPenaltyKind | null;
   readonly unoVulnerablePlayerId: string | null;
   readonly wd4ChallengeState: Wd4ChallengeState | null;
   readonly lastSeqByPlayer: Readonly<Record<string, number>>;
@@ -132,6 +164,11 @@ export interface BaseClientAction {
 
 export interface ChooseInitialColorAction extends BaseClientAction {
   readonly type: 'CHOOSE_INITIAL_COLOR';
+  readonly color: ColoredCardColor;
+}
+
+export interface ChooseRouletteColorAction extends BaseClientAction {
+  readonly type: 'CHOOSE_ROULETTE_COLOR';
   readonly color: ColoredCardColor;
 }
 
@@ -178,6 +215,7 @@ export interface StartNextRoundAction extends BaseClientAction {
 
 export type GameAction =
   | ChooseInitialColorAction
+  | ChooseRouletteColorAction
   | PlayCardAction
   | DrawCardAction
   | PassTurnAction
@@ -232,10 +270,40 @@ export type GameEvent =
       readonly jumpedIn: boolean;
     }
   | {
+      readonly type: 'DISCARD_ALL_PLAYED';
+      readonly playerId: string;
+      readonly color: ColoredCardColor;
+      readonly count: number;
+    }
+  | {
+      readonly type: 'COLOR_ROULETTE_RESOLVED';
+      readonly playerId: string;
+      readonly chosenColor: ColoredCardColor;
+      readonly drawnCount: number;
+    }
+  | {
+      readonly type: 'PLAYER_ELIMINATED';
+      readonly playerId: string;
+      readonly cardCount: number;
+      readonly bonusAwardedToId: string | null;
+      readonly bonusPoints: number;
+    }
+  | {
       readonly type: 'CARDS_DRAWN';
       readonly playerId: string;
       readonly count: number;
-      readonly reason: 'TURN_DRAW' | 'DRAW_TWO' | 'WILD_DRAW_FOUR' | 'UNO_PENALTY' | 'CHALLENGE_PENALTY' | 'INITIAL_FLIP';
+      readonly reason:
+        | 'TURN_DRAW'
+        | 'DRAW_TWO'
+        | 'DRAW_FOUR'
+        | 'WILD_DRAW_FOUR'
+        | 'WILD_REVERSE_DRAW_FOUR'
+        | 'WILD_DRAW_SIX'
+        | 'WILD_DRAW_TEN'
+        | 'COLOR_ROULETTE'
+        | 'UNO_PENALTY'
+        | 'CHALLENGE_PENALTY'
+        | 'INITIAL_FLIP';
     }
   | {
       readonly type: 'TURN_PASSED';
@@ -244,7 +312,12 @@ export type GameEvent =
   | {
       readonly type: 'TURN_SKIPPED';
       readonly skippedPlayerId: string;
-      readonly reason: 'SKIP_CARD' | 'REVERSE_TWO_PLAYER' | 'DRAW_PENALTY' | 'INITIAL_FLIP';
+      readonly reason:
+        | 'SKIP_CARD'
+        | 'SKIP_ALL'
+        | 'REVERSE_TWO_PLAYER'
+        | 'DRAW_PENALTY'
+        | 'INITIAL_FLIP';
     }
   | {
       readonly type: 'DIRECTION_REVERSED';
@@ -310,6 +383,7 @@ export interface OpponentView {
   readonly score: number;
   readonly calledUno: boolean;
   readonly connected: boolean;
+  readonly eliminated?: boolean;
 }
 
 export interface PlayerView {
@@ -328,6 +402,7 @@ export interface PlayerView {
   readonly opponents: readonly OpponentView[];
   readonly pendingDrawnCardId: string | null;
   readonly pendingDrawCount: number;
+  readonly pendingDrawKind?: DrawPenaltyKind | null;
   readonly unoVulnerablePlayerId: string | null;
   readonly lastSeq: number;
   readonly houseRules: HouseRules;
@@ -335,4 +410,5 @@ export interface PlayerView {
   readonly roundWinnerId: string | null;
   readonly matchWinnerId: string | null;
   readonly revealedSeed: string | null;
+  readonly eliminated?: boolean;
 }

@@ -55,14 +55,28 @@ export function getCardRankLabel(card: Card): string {
       return String(card.value);
     case 'SKIP':
       return '⊘';
+    case 'SKIP_ALL':
+      return '⊘∀';
     case 'REVERSE':
       return '⇄';
     case 'DRAW_TWO':
       return '+2';
+    case 'DRAW_FOUR':
+      return '+4';
+    case 'DISCARD_ALL':
+      return '⇊';
     case 'WILD':
       return '✦';
     case 'WILD_DRAW_FOUR':
       return '+4';
+    case 'WILD_REVERSE_DRAW_FOUR':
+      return '⇄+4';
+    case 'WILD_DRAW_SIX':
+      return '+6';
+    case 'WILD_DRAW_TEN':
+      return '+10';
+    case 'WILD_COLOR_ROULETTE':
+      return '◎';
   }
 }
 
@@ -76,13 +90,27 @@ export function getCardAccessibleName(card: Card): string {
       return `${suitName} ${card.value}`;
     case 'SKIP':
       return `${suitName} Skip`;
+    case 'SKIP_ALL':
+      return `${suitName} Skip Everyone`;
     case 'REVERSE':
       return `${suitName} Reverse`;
     case 'DRAW_TWO':
-      return `${suitName} Draw Two`;
+      return `${suitName} Draw Two (+2)`;
+    case 'DRAW_FOUR':
+      return `${suitName} Draw Four (+4)`;
+    case 'DISCARD_ALL':
+      return `${suitName} Discard All`;
     case 'WILD':
       return 'Wild Prism';
     case 'WILD_DRAW_FOUR':
       return 'Wild Draw Four (+4)';
+    case 'WILD_REVERSE_DRAW_FOUR':
+      return 'Wild Reverse Draw Four (⇄+4)';
+    case 'WILD_DRAW_SIX':
+      return 'Wild Draw Six (+6)';
+    case 'WILD_DRAW_TEN':
+      return 'Wild Draw Ten (+10)';
+    case 'WILD_COLOR_ROULETTE':
+      return 'Wild Color Roulette';
   }
 }

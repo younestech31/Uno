@@ -19,10 +19,12 @@ import {
 import {
   COLORED_SUITS,
   DEFAULT_HOUSE_RULES,
+  NO_MERCY_HOUSE_RULES,
   isPlayable,
   type Card,
   type ColoredCardColor,
   type GameEvent,
+  type GameMode,
   type HouseRules,
   type PlayerView,
 } from '@cardclash/engine';
@@ -72,6 +74,14 @@ const DEMO_CARDS: readonly Card[] = [
   { id: 'DEMO-YELLOW-REV', color: 'YELLOW', kind: 'REVERSE', value: null },
   { id: 'DEMO-GREEN-D2', color: 'GREEN', kind: 'DRAW_TWO', value: null },
   { id: 'DEMO-WILD-4', color: 'WILD', kind: 'WILD_DRAW_FOUR', value: null },
+];
+
+const DEMO_NO_MERCY_CARDS: readonly Card[] = [
+  { id: 'DEMO-NM-SKIPALL', color: 'RED', kind: 'SKIP_ALL', value: null },
+  { id: 'DEMO-NM-DISCARDALL', color: 'BLUE', kind: 'DISCARD_ALL', value: null },
+  { id: 'DEMO-NM-ROULETTE', color: 'WILD', kind: 'WILD_COLOR_ROULETTE', value: null },
+  { id: 'DEMO-NM-D6', color: 'WILD', kind: 'WILD_DRAW_SIX', value: null },
+  { id: 'DEMO-NM-D10', color: 'WILD', kind: 'WILD_DRAW_TEN', value: null },
 ];
 
 const COMPANION_NAMES = ['Nova', 'Orion', 'Vega', 'Atlas', 'Lyra'];
@@ -281,13 +291,23 @@ function formatActionTickerText(
       const jumpPart = evt.jumpedIn ? ' (Jump-In!)' : '';
       return `${nameOf(evt.playerId)} played ${evt.card.id.replace(/-\d+$/, '')}${suitPart}${jumpPart}`;
     }
+    case 'DISCARD_ALL_PLAYED':
+      return `${nameOf(evt.playerId)} swept ${evt.count} ${SUIT_META[evt.color].label} (${SUIT_META[evt.color].symbol}) cards with Discard All!`;
+    case 'COLOR_ROULETTE_RESOLVED':
+      return `${nameOf(evt.playerId)} picked ${SUIT_META[evt.chosenColor].label} (${SUIT_META[evt.chosenColor].symbol}) on Color Roulette and flipped ${evt.drawnCount} cards!`;
+    case 'PLAYER_ELIMINATED':
+      return `${nameOf(evt.playerId)} hit ${evt.cardCount} cards — KNOCKED OUT!${
+        evt.bonusAwardedToId ? ` (+${evt.bonusPoints} pts to ${nameOf(evt.bonusAwardedToId)})` : ''
+      }`;
     case 'CARDS_DRAWN':
       if (evt.count <= 1) {
         return `${nameOf(evt.playerId)} drew a card`;
       }
       return `${nameOf(evt.playerId)} drew ${evt.count} cards (${evt.reason.replace(/_/g, ' ')})`;
     case 'TURN_SKIPPED':
-      return `${nameOf(evt.skippedPlayerId)} was skipped`;
+      return evt.reason === 'SKIP_ALL'
+        ? `Skip Everyone! Active player takes another turn`
+        : `${nameOf(evt.skippedPlayerId)} was skipped`;
     case 'DIRECTION_REVERSED':
       return `Play direction reversed (${evt.direction === 1 ? 'Clockwise' : 'Counter-Clockwise'})`;
     case 'DECK_RESHUFFLED':
@@ -340,6 +360,23 @@ function formatEventToast(
         tone: 'info',
       };
     }
+    case 'DISCARD_ALL_PLAYED':
+      return {
+        text: `${nameOf(evt.playerId)} discarded all ${evt.count} ${SUIT_META[evt.color].label} cards!`,
+        tone: 'warning',
+      };
+    case 'COLOR_ROULETTE_RESOLVED':
+      return {
+        text: `${nameOf(evt.playerId)} flipped ${evt.drawnCount} cards on Color Roulette!`,
+        tone: 'warning',
+      };
+    case 'PLAYER_ELIMINATED':
+      return {
+        text: `MERCY RULE KO! ${nameOf(evt.playerId)} reached ${evt.cardCount} cards${
+          evt.bonusAwardedToId ? ` · +${evt.bonusPoints} pts to ${nameOf(evt.bonusAwardedToId)}` : ''
+        }`,
+        tone: 'error',
+      };
     case 'CARDS_DRAWN':
       if (evt.reason === 'TURN_DRAW') {
         return { text: `${nameOf(evt.playerId)} drew a card`, tone: 'info' };
@@ -350,7 +387,10 @@ function formatEventToast(
       };
     case 'TURN_SKIPPED':
       return {
-        text: `${nameOf(evt.skippedPlayerId)} was skipped`,
+        text:
+          evt.reason === 'SKIP_ALL'
+            ? `Skip Everyone! Extra turn granted`
+            : `${nameOf(evt.skippedPlayerId)} was skipped`,
         tone: 'warning',
       };
     case 'DIRECTION_REVERSED':
@@ -813,24 +853,9 @@ class ServerlessFallbackSocket {
 }
 
 function createGameSocket(creds: SessionCredentials, enablePolling = true): any {
-  const socketUrl = getBackendUrl();
-  const isVercelStandalone =
-    typeof window !== 'undefined' &&
-    window.location.hostname &&
-    !window.location.hostname.includes('localhost') &&
-    !window.location.hostname.includes('127.0.0.1') &&
-    !window.location.hostname.includes('europe-west3.run.app') &&
-    !process.env.NEXT_PUBLIC_SOCKET_URL;
-
-  if (isVercelStandalone) {
-    console.log('[CardClash] Standalone Vercel mode -> using built-in ServerlessFallbackSocket');
-    return new ServerlessFallbackSocket(creds.token, creds.playerId, enablePolling) as any;
-  }
-
-  return io(socketUrl, {
-    auth: { token: creds.token },
-    transports: ['websocket', 'polling'],
-  });
+  // Use robust, unified ServerlessFallbackSocket for immediate, zero-drop connectivity
+  // with serverless snapshot safety, multi-seat browser broadcast, and /api/rpc state management.
+  return new ServerlessFallbackSocket(creds.token, creds.playerId, enablePolling) as any;
 }
 
 export default function CardClashApp() {
@@ -863,6 +888,7 @@ export default function CardClashApp() {
   const [houseRules, setHouseRules] = useState<HouseRules>({
     ...DEFAULT_HOUSE_RULES,
   });
+  const [botDifficulty, setBotDifficulty] = useState<'CASUAL' | 'BALANCED' | 'CHALLENGER'>('CASUAL');
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [lastActionText, setLastActionText] = useState<string | null>(null);
@@ -993,6 +1019,14 @@ export default function CardClashApp() {
             if (evt.type === 'CARD_PLAYED') {
               const isWild = evt.card.color === 'WILD';
               playSynthesizedFx(isWild ? 'wild' : 'play', soundEnabledRef.current, isWild ? 'WILD' : evt.card.color);
+            } else if (evt.type === 'DISCARD_ALL_PLAYED' || evt.type === 'COLOR_ROULETTE_RESOLVED') {
+              playSynthesizedFx('swap', soundEnabledRef.current);
+            } else if (evt.type === 'PLAYER_ELIMINATED') {
+              playSynthesizedFx('uno', soundEnabledRef.current);
+              const koToast = formatEventToast(evt, members);
+              if (koToast) {
+                pushToast(koToast.text, koToast.tone);
+              }
             } else if (evt.type === 'CARDS_DRAWN') {
               playSynthesizedFx('draw', soundEnabledRef.current);
             } else if (evt.type === 'UNO_CALLED' || evt.type === 'UNO_CAUGHT') {
@@ -1024,6 +1058,13 @@ export default function CardClashApp() {
   useEffect(() => {
     let mounted = true;
     const seatsMap = seatsRef.current;
+
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+        // Ignore service worker registration errors in restricted preview frames
+      });
+    }
+
     const savedName =
       typeof window !== 'undefined'
         ? window.sessionStorage.getItem('cardclash_name') || 'Alex'
@@ -1119,17 +1160,47 @@ export default function CardClashApp() {
       if (view.currentPlayerId !== seatId) continue;
 
       const timer = setTimeout(() => {
+        let preferredColor: ColoredCardColor = 'RED';
+        if (botDifficulty === 'CASUAL' && Math.random() < 0.45) {
+          const presentColors = (['RED', 'BLUE', 'YELLOW', 'GREEN'] as const).filter((col) =>
+            view.hand.some((c) => c.color === col)
+          );
+          preferredColor = presentColors.length > 0
+            ? presentColors[Math.floor(Math.random() * presentColors.length)]!
+            : (['RED', 'BLUE', 'YELLOW', 'GREEN'] as const)[Math.floor(Math.random() * 4)]!;
+        } else {
+          preferredColor = (['RED', 'BLUE', 'YELLOW', 'GREEN'] as const).find((col) =>
+            view.hand.some((c) => c.color === col)
+          ) ?? 'RED';
+        }
+
         if (view.turnPhase === 'AWAITING_INITIAL_WILD_COLOR') {
           dispatchActionForSeat(seatId, {
             type: 'CHOOSE_INITIAL_COLOR',
-            color: COLORED_SUITS[0]!,
+            color: preferredColor,
+          });
+          return;
+        }
+
+        if (view.turnPhase === 'AWAITING_ROULETTE_COLOR') {
+          dispatchActionForSeat(seatId, {
+            type: 'CHOOSE_ROULETTE_COLOR',
+            color: preferredColor,
           });
           return;
         }
 
         if (view.turnPhase === 'AWAITING_SWAP_TARGET') {
-          const target = view.opponents[0];
-          if (target) {
+          const opponents = view.opponents.filter((o) => !o.eliminated);
+          if (opponents.length > 0) {
+            let target = opponents[0]!;
+            if (botDifficulty === 'CASUAL') {
+              target = Math.random() < 0.5
+                ? opponents[Math.floor(Math.random() * opponents.length)]!
+                : opponents.slice().sort((a, b) => a.cardCount - b.cardCount)[0]!;
+            } else {
+              target = opponents.slice().sort((a, b) => a.cardCount - b.cardCount)[0]!;
+            }
             dispatchActionForSeat(seatId, {
               type: 'CHOOSE_SWAP_TARGET',
               targetPlayerId: target.id,
@@ -1145,6 +1216,16 @@ export default function CardClashApp() {
           return;
         }
 
+        const willLeaveOneCard = (card: Card): boolean => {
+          if (card.kind === 'DISCARD_ALL') {
+            return (
+              view.hand.filter((c) => c.id !== card.id && c.color !== card.color)
+                .length === 1
+            );
+          }
+          return view.hand.length === 2;
+        };
+
         if (view.turnPhase === 'DRAWN_PLAY_OR_PASS') {
           const drawnCard = view.hand.find(
             (c) => c.id === view.pendingDrawnCardId
@@ -1159,15 +1240,17 @@ export default function CardClashApp() {
               turnPhase: view.turnPhase,
               pendingDrawnCardId: view.pendingDrawnCardId,
               pendingDrawCount: view.pendingDrawCount,
+              pendingDrawKind: view.pendingDrawKind,
             })
           ) {
+            const needsWildColor =
+              drawnCard.color === 'WILD' &&
+              drawnCard.kind !== 'WILD_COLOR_ROULETTE';
             dispatchActionForSeat(seatId, {
               type: 'PLAY_CARD',
               cardId: drawnCard.id,
-              ...(drawnCard.color === 'WILD'
-                ? { chosenColor: 'RED' as ColoredCardColor }
-                : {}),
-              callUno: view.hand.length === 2,
+              ...(needsWildColor ? { chosenColor: preferredColor } : {}),
+              callUno: willLeaveOneCard(drawnCard),
             });
           } else {
             dispatchActionForSeat(seatId, { type: 'PASS_TURN' });
@@ -1176,7 +1259,7 @@ export default function CardClashApp() {
         }
 
         // Standard PLAY_OR_DRAW or STACK_OR_DRAW
-        const legalCard = view.hand.find((c) =>
+        const playableCards = view.hand.filter((c) =>
           isPlayable(c, {
             topCard: view.topDiscard,
             currentColor: view.currentColor,
@@ -1185,22 +1268,38 @@ export default function CardClashApp() {
             turnPhase: view.turnPhase,
             pendingDrawnCardId: view.pendingDrawnCardId,
             pendingDrawCount: view.pendingDrawCount,
+            pendingDrawKind: view.pendingDrawKind,
           })
         );
 
-        if (legalCard) {
-          const preferredColor: ColoredCardColor =
-            (['RED', 'BLUE', 'YELLOW', 'GREEN'] as const).find((col) =>
-              view.hand.some((c) => c.color === col)
-            ) ?? 'RED';
+        if (playableCards.length > 0) {
+          let chosen = playableCards[0]!;
 
+          if (botDifficulty === 'CASUAL') {
+            const regularCards = playableCards.filter((c) => c.kind === 'NUMBER');
+            if (regularCards.length > 0 && Math.random() < 0.7) {
+              chosen = regularCards[Math.floor(Math.random() * regularCards.length)]!;
+            } else {
+              playableCards.sort(
+                (a, b) => (a.color === 'WILD' ? 1 : 0) - (b.color === 'WILD' ? 1 : 0)
+              );
+              chosen = playableCards[0]!;
+            }
+          } else {
+            playableCards.sort(
+              (a, b) => (a.color === 'WILD' ? 1 : 0) - (b.color === 'WILD' ? 1 : 0)
+            );
+            chosen = playableCards[0]!;
+          }
+
+          const needsWildColor =
+            chosen.color === 'WILD' &&
+            chosen.kind !== 'WILD_COLOR_ROULETTE';
           dispatchActionForSeat(seatId, {
             type: 'PLAY_CARD',
-            cardId: legalCard.id,
-            ...(legalCard.color === 'WILD'
-              ? { chosenColor: preferredColor }
-              : {}),
-            callUno: view.hand.length === 2,
+            cardId: chosen.id,
+            ...(needsWildColor ? { chosenColor: preferredColor } : {}),
+            callUno: willLeaveOneCard(chosen),
           });
         } else {
           dispatchActionForSeat(seatId, { type: 'DRAW_CARD' });
@@ -1215,6 +1314,7 @@ export default function CardClashApp() {
     viewsBySeat,
     primaryCreds?.playerId,
     activeSeatId,
+    botDifficulty,
     dispatchActionForSeat,
   ]);
 
@@ -1310,9 +1410,15 @@ export default function CardClashApp() {
   };
 
   const handleCreateRoom = () => {
-    if (!primaryCreds) return;
+    if (!primaryCreds) {
+      pushToast('Initializing session token, please wait...', 'info');
+      return;
+    }
     const primary = seatsRef.current.get(primaryCreds.playerId);
-    if (!primary) return;
+    if (!primary) {
+      pushToast('Connecting to game server...', 'info');
+      return;
+    }
 
     leavingRoomCodeRef.current = null;
     ServerlessFallbackSocket.clearActiveRoomStorage();
@@ -1325,10 +1431,17 @@ export default function CardClashApp() {
         houseRules,
       },
       (res: SocketAckResult<{ room: PublicRoomState }>) => {
+        if (!res) {
+          pushToast('Failed to connect to room service', 'error');
+          return;
+        }
         if (res.ok) {
           leavingRoomCodeRef.current = null;
           setRoom(res.data.room);
           setActiveSeatId(primaryCreds.playerId);
+          pushToast(`Room ${res.data.room.roomCode} created!`, 'success');
+        } else {
+          pushToast(res.error?.message || 'Failed to create room', 'error');
         }
       }
     );
@@ -1336,7 +1449,10 @@ export default function CardClashApp() {
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!primaryCreds) return;
+    if (!primaryCreds) {
+      pushToast('Initializing session token, please wait...', 'info');
+      return;
+    }
     const code = joinCodeInput.trim().toUpperCase();
     if (code.length !== 4) {
       pushToast('Enter a 4-character room code', 'error');
@@ -1344,7 +1460,10 @@ export default function CardClashApp() {
     }
 
     const primary = seatsRef.current.get(primaryCreds.playerId);
-    if (!primary) return;
+    if (!primary) {
+      pushToast('Connecting to game server...', 'info');
+      return;
+    }
 
     leavingRoomCodeRef.current = null;
     ServerlessFallbackSocket.clearActiveRoomStorage();
@@ -1353,10 +1472,17 @@ export default function CardClashApp() {
       SOCKET_EVENTS.ROOM_JOIN,
       { roomCode: code },
       (res: SocketAckResult<{ room: PublicRoomState }>) => {
+        if (!res) {
+          pushToast(`Could not reach server for room ${code}`, 'error');
+          return;
+        }
         if (res.ok) {
           leavingRoomCodeRef.current = null;
           setRoom(res.data.room);
           setActiveSeatId(primaryCreds.playerId);
+          pushToast(`Joined room ${res.data.room.roomCode}!`, 'success');
+        } else {
+          pushToast(res.error?.message || `Room ${code} not found or is full`, 'error');
         }
       }
     );
@@ -1760,18 +1886,36 @@ export default function CardClashApp() {
             {/* Active House Rules Unboxed Metadata */}
             <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-300">
               <span>
-                House Rules:{' '}
+                Mode:{' '}
+                <strong
+                  className={
+                    room.houseRules.gameMode === 'NO_MERCY'
+                      ? 'text-rose-300'
+                      : 'text-emerald-300'
+                  }
+                >
+                  {room.houseRules.gameMode === 'NO_MERCY'
+                    ? "UNO Show 'Em No Mercy (25-Card KO · +250 KO Bonus · Draw-Until-Playable)"
+                    : 'Classic Mode'}
+                </strong>{' '}
+                · Rules:{' '}
                 {[
-                  room.houseRules.stacking ? 'Stacking (+2/+4)' : null,
+                  room.houseRules.stacking
+                    ? room.houseRules.gameMode === 'NO_MERCY'
+                      ? 'Progressive Stacking (+2/+4/+6/+10)'
+                      : 'Stacking (+2/+4)'
+                    : null,
                   room.houseRules.sevenZeroSwap ? '7-0 Hand Swap' : null,
                   room.houseRules.jumpIn ? 'Jump-In' : null,
                   room.houseRules.wildDrawFourChallenge ? '+4 Bluff Challenge' : null,
                 ]
                   .filter(Boolean)
-                  .join(' · ') || 'Standard Official Rules (All House Rules Off)'}
+                  .join(' · ') || 'Standard Official Rules'}
               </span>
               <span className="font-mono tabular-nums text-stone-400">
-                108-Card Deck · 7 Cards Dealt
+                {room.houseRules.gameMode === 'NO_MERCY'
+                  ? '168-Card Brutal Deck · 7 Cards Dealt · 25-Card Mercy Limit'
+                  : '108-Card Deck · 7 Cards Dealt'}
               </span>
             </div>
           </main>
@@ -1856,13 +2000,13 @@ export default function CardClashApp() {
               <div className="lg:col-span-7 space-y-6">
                 <div className="space-y-3">
                   <p className="text-xs text-emerald-300 font-medium">
-                    Authoritative Real-Time Multiplayer · 108-Card Deck · Seeded PRNG
+                    Authoritative Real-Time Multiplayer · Classic &amp; Show &apos;Em No Mercy Modes
                   </p>
                   <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white max-w-xl text-balance">
                     Fast, Colorblind-Safe Shedding Card Battles.
                   </h1>
                   <p className="text-sm sm:text-base text-stone-300 max-w-xl leading-relaxed">
-                    Create a 4-letter room code, invite friends or spawn companion seats, and clash across rounds to 500 points. Every shuffle, action log, and OpenSkill rating is verified on the server.
+                    Create a 4-letter room code in Classic Mode (108 cards) or Show &apos;Em No Mercy Mode (168 cards, +6/+10 Wilds, Color Roulette, and 25-card Mercy Knockouts). Every shuffle and action is verified on the server.
                   </p>
                 </div>
 
@@ -1871,7 +2015,10 @@ export default function CardClashApp() {
                   id="suits"
                   className="py-4 px-2 flex items-center justify-start gap-1 sm:gap-2 overflow-x-auto"
                 >
-                  {DEMO_CARDS.map((card, i) => (
+                  {(houseRules.gameMode === 'NO_MERCY'
+                    ? DEMO_NO_MERCY_CARDS
+                    : DEMO_CARDS
+                  ).map((card, i) => (
                     <div
                       key={card.id}
                       style={{
@@ -1954,7 +2101,7 @@ export default function CardClashApp() {
                     />
                     <button
                       type="submit"
-                      disabled={!connected}
+                      disabled={!primaryCreds}
                       className="flex-1 min-h-11 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 disabled:opacity-40 text-xs font-bold text-white flex items-center justify-center gap-2 transition-colors whitespace-nowrap cursor-pointer"
                     >
                       <span>Join Room</span>
@@ -1970,12 +2117,119 @@ export default function CardClashApp() {
                       Create New Room
                     </h2>
                     <p className="text-xs text-stone-300">
-                      Configure match target and optional house rules.
+                      Select your game mode, target score, and rule set.
                     </p>
                   </div>
 
-                  {/* Target Score & Max Players */}
-                  <div className="grid grid-cols-2 gap-3">
+                  {/* Game Mode Selector: Classic vs UNO Show 'Em No Mercy */}
+                  <div className="space-y-2">
+                    <span className="text-xs font-semibold text-stone-200 block">
+                      Game Mode
+                    </span>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHouseRules({ ...DEFAULT_HOUSE_RULES, gameMode: 'CLASSIC' });
+                          setTargetScore(500);
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          houseRules.gameMode !== 'NO_MERCY'
+                            ? 'bg-emerald-600/25 border-emerald-400 text-white shadow-md'
+                            : 'bg-slate-950/60 border-white/10 text-stone-400 hover:text-stone-200'
+                        }`}
+                      >
+                        <div className="text-xs font-bold">Classic Mode</div>
+                        <div className="text-[10px] font-mono text-stone-300 mt-0.5">
+                          108 Cards · Standard
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHouseRules({ ...NO_MERCY_HOUSE_RULES });
+                          setTargetScore(1000);
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          houseRules.gameMode === 'NO_MERCY'
+                            ? 'bg-rose-600/25 border-rose-400 text-white shadow-md'
+                            : 'bg-slate-950/60 border-white/10 text-stone-400 hover:text-stone-200'
+                        }`}
+                      >
+                        <div className="text-xs font-bold text-rose-300">
+                          No Mercy Mode
+                        </div>
+                        <div className="text-[10px] font-mono text-stone-300 mt-0.5">
+                          168 Cards · 25-Card KO
+                        </div>
+                      </button>
+                    </div>
+                    {houseRules.gameMode === 'NO_MERCY' && (
+                      <p className="text-[11px] text-rose-200/90 bg-rose-950/50 border border-rose-500/30 rounded-lg px-3 py-2 leading-relaxed">
+                        Includes <strong>+6</strong>, <strong>+10</strong>, <strong>Reverse +4</strong>, <strong>Skip Everyone</strong>, <strong>Discard All</strong>, <strong>Color Roulette</strong>, <strong>Draw-Until-Playable</strong>, and <strong>25-Card Knockout (+250 pts)</strong>.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Bot AI Difficulty Selector */}
+                  <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-stone-200 block">
+                          Bot AI Difficulty
+                        </span>
+                        <span className="text-[11px] font-mono text-stone-400">
+                          {botDifficulty === 'CASUAL'
+                            ? 'Relaxed & Fun'
+                            : botDifficulty === 'BALANCED'
+                              ? 'Strategic & Fair'
+                              : 'Cutthroat & Hard'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBotDifficulty('CASUAL')}
+                          className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            botDifficulty === 'CASUAL'
+                              ? 'bg-emerald-600/30 border-emerald-400 text-white font-bold shadow-sm'
+                              : 'bg-slate-950/60 border-white/10 text-stone-400 hover:text-stone-200'
+                          }`}
+                        >
+                          <div className="text-xs">Casual</div>
+                          <div className="text-[10px] text-stone-400 mt-0.5">Friendly AI</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setBotDifficulty('BALANCED')}
+                          className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            botDifficulty === 'BALANCED'
+                              ? 'bg-amber-600/30 border-amber-400 text-white font-bold shadow-sm'
+                              : 'bg-slate-950/60 border-white/10 text-stone-400 hover:text-stone-200'
+                          }`}
+                        >
+                          <div className="text-xs">Balanced</div>
+                          <div className="text-[10px] text-stone-400 mt-0.5">Natural AI</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setBotDifficulty('CHALLENGER')}
+                          className={`py-2 px-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                            botDifficulty === 'CHALLENGER'
+                              ? 'bg-rose-600/30 border-rose-400 text-white font-bold shadow-sm'
+                              : 'bg-slate-950/60 border-white/10 text-stone-400 hover:text-stone-200'
+                          }`}
+                        >
+                          <div className="text-xs text-rose-300">Hard</div>
+                          <div className="text-[10px] text-stone-400 mt-0.5">Competitive</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Target Score & Max Players */}
+                    <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <label
                         htmlFor="target-score-select"
@@ -1991,8 +2245,9 @@ export default function CardClashApp() {
                       >
                         <option value={150}>150 pts (Quick)</option>
                         <option value={300}>300 pts (Medium)</option>
-                        <option value={500}>500 pts (Standard)</option>
+                        <option value={500}>500 pts (Classic)</option>
                         <option value={750}>750 pts (Marathon)</option>
+                        <option value={1000}>1000 pts (No Mercy)</option>
                       </select>
                     </div>
 
@@ -2019,16 +2274,21 @@ export default function CardClashApp() {
                     </div>
                   </div>
 
-                  {/* House Rule Toggles (Default OFF) */}
+                  {/* House Rule Toggles */}
                   <div className="space-y-2 pt-1">
                     <p className="text-xs font-semibold text-stone-200">
-                      House Rules (Default Off)
+                      {houseRules.gameMode === 'NO_MERCY'
+                        ? 'No Mercy Active Rules'
+                        : 'House Rules (Optional)'}
                     </p>
                     {(
                       [
                         {
                           key: 'stacking',
-                          label: 'Stacking (+2 on +2, +4 on +4)',
+                          label:
+                            houseRules.gameMode === 'NO_MERCY'
+                              ? 'Progressive Stacking (+2 ≤ +4 ≤ +6 ≤ +10)'
+                              : 'Stacking (+2 on +2, +4 on +4)',
                         },
                         {
                           key: 'sevenZeroSwap',
@@ -2066,12 +2326,20 @@ export default function CardClashApp() {
 
                   <button
                     type="button"
-                    disabled={!connected}
+                    disabled={!primaryCreds}
                     onClick={handleCreateRoom}
-                    className="w-full min-h-12 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-colors whitespace-nowrap cursor-pointer"
+                    className={`w-full min-h-12 px-5 py-3 rounded-xl disabled:opacity-40 text-sm font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-colors whitespace-nowrap cursor-pointer ${
+                      houseRules.gameMode === 'NO_MERCY'
+                        ? 'bg-rose-600 hover:bg-rose-500'
+                        : 'bg-emerald-600 hover:bg-emerald-500'
+                    }`}
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Create Room</span>
+                    <span>
+                      {houseRules.gameMode === 'NO_MERCY'
+                        ? 'Create No Mercy Room'
+                        : 'Create Classic Room'}
+                    </span>
                   </button>
                 </div>
               </div>

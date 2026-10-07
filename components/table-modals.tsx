@@ -118,19 +118,21 @@ export function SwapTargetModal({
             </div>
 
             <div className="space-y-2">
-              {opponents.map((opp) => (
-                <button
-                  key={opp.id}
-                  type="button"
-                  onClick={() => onSelectTarget(opp.id)}
-                  className="w-full flex items-center justify-between min-h-12 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-left transition-colors cursor-pointer"
-                >
-                  <span className="text-sm font-semibold">{opp.name}</span>
-                  <span className="text-xs font-mono text-emerald-400">
-                    {opp.cardCount} cards
-                  </span>
-                </button>
-              ))}
+              {opponents
+                .filter((opp) => !opp.eliminated)
+                .map((opp) => (
+                  <button
+                    key={opp.id}
+                    type="button"
+                    onClick={() => onSelectTarget(opp.id)}
+                    className="w-full flex items-center justify-between min-h-12 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-left transition-colors cursor-pointer"
+                  >
+                    <span className="text-sm font-semibold">{opp.name}</span>
+                    <span className="text-xs font-mono text-emerald-400">
+                      {opp.cardCount} cards
+                    </span>
+                  </button>
+                ))}
             </div>
           </motion.div>
         </motion.div>
@@ -239,12 +241,14 @@ export function RoundSummaryModal({
       name: `${viewerName} (You)`,
       cardsLeft: view.hand.length,
       score: viewerScore,
+      eliminated: Boolean(view.eliminated),
     },
     ...view.opponents.map((o) => ({
       id: o.id,
       name: o.name,
       cardsLeft: o.cardCount,
       score: o.score,
+      eliminated: Boolean(o.eliminated),
     })),
   ].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
@@ -279,7 +283,7 @@ export function RoundSummaryModal({
             <div className="space-y-2 border-t border-b border-white/10 py-3">
               <div className="flex items-center justify-between text-xs text-stone-400 pb-1">
                 <span>Player</span>
-                <span>Remaining · Score</span>
+                <span>Status · Score</span>
               </div>
               {allStandings.map((row) => (
                 <div
@@ -290,7 +294,11 @@ export function RoundSummaryModal({
                     {row.name}
                   </span>
                   <span className="font-mono tabular-nums text-xs text-stone-300">
-                    {row.cardsLeft} cards
+                    {row.eliminated ? (
+                      <span className="text-rose-400 font-bold">KO (25+)</span>
+                    ) : (
+                      `${row.cardsLeft} cards`
+                    )}
                     {typeof row.score === 'number' ? ` · ${row.score} pts` : ''}
                   </span>
                 </div>

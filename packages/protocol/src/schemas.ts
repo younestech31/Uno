@@ -3,8 +3,11 @@ import type { GameEvent, HouseRules, PlayerView } from '@cardclash/engine';
 
 export const ColoredCardColorSchema = z.enum(['RED', 'YELLOW', 'GREEN', 'BLUE']);
 
+export const GameModeSchema = z.enum(['CLASSIC', 'NO_MERCY']);
+
 export const HouseRulesPartialSchema = z
   .object({
+    gameMode: GameModeSchema.optional(),
     stacking: z.boolean().optional(),
     sevenZeroSwap: z.boolean().optional(),
     jumpIn: z.boolean().optional(),
@@ -14,6 +17,7 @@ export const HouseRulesPartialSchema = z
 
 export const HouseRulesSchema = z
   .object({
+    gameMode: GameModeSchema.optional(),
     stacking: z.boolean(),
     sevenZeroSwap: z.boolean(),
     jumpIn: z.boolean(),
@@ -132,6 +136,15 @@ export const ChooseInitialColorIntentSchema = z
   })
   .strict();
 
+export const ChooseRouletteColorIntentSchema = z
+  .object({
+    type: z.literal('CHOOSE_ROULETTE_COLOR'),
+    color: ColoredCardColorSchema,
+    seq: SeqSchema,
+    playerId: OptionalPlayerIdSchema,
+  })
+  .strict();
+
 export const PlayCardIntentSchema = z
   .object({
     type: z.literal('PLAY_CARD'),
@@ -211,6 +224,7 @@ export const StartNextRoundIntentSchema = z
 
 export const ClientGameActionIntentSchema = z.discriminatedUnion('type', [
   ChooseInitialColorIntentSchema,
+  ChooseRouletteColorIntentSchema,
   PlayCardIntentSchema,
   DrawCardIntentSchema,
   PassTurnIntentSchema,

@@ -1,7 +1,15 @@
-import { calculateHandPoints, COLORED_SUITS, createStandardDeck } from './deck';
+import {
+  calculateHandPoints,
+  COLORED_SUITS,
+  createNoMercyDeck,
+  createStandardDeck,
+  KNOCKOUT_BONUS_POINTS,
+  MERCY_CARD_LIMIT,
+} from './deck';
 import { createPrngState, fisherYatesShuffle } from './prng';
 import {
-   getNextPlayerIndex,
+  getNextActivePlayerIndex,
+  getNextPlayerIndex,
   hasCardOfCurrentColor,
   isExactJumpInMatch,
   isPlayable,
@@ -10,14 +18,17 @@ import {
   type Card,
   type ColoredCardColor,
   DEFAULT_HOUSE_RULES,
+  type DrawPenaltyKind,
   type EngineError,
   type EngineErrorCode,
   type EngineResult,
   type GameAction,
   type GameConfig,
   type GameEvent,
+  type GameMode,
   type GameState,
   type HouseRules,
+  NO_MERCY_HOUSE_RULES,
   type PlayDirection,
   type PlayerState,
   type PrngState,
@@ -33,6 +44,16 @@ function isValidColoredSuit(color: unknown): color is ColoredCardColor {
   return (
     typeof color === 'string' &&
     (COLORED_SUITS as readonly string[]).includes(color)
+  );
+}
+
+function requiresWildColorChoice(kind: Card['kind']): boolean {
+  return (
+    kind === 'WILD' ||
+    kind === 'WILD_DRAW_FOUR' ||
+    kind === 'WILD_REVERSE_DRAW_FOUR' ||
+    kind === 'WILD_DRAW_SIX' ||
+    kind === 'WILD_DRAW_TEN'
   );
 }
 
@@ -95,6 +116,169 @@ function drawFromDeck(
   };
 }
 
+interface MercyEvaluationResult {
+  readonly players: PlayerState[];
+  readonly discardPile: Card[];
+  readonly events: GameEvent[];
+  readonly wasEliminated: boolean;
+  readonly roundEndedState: {
+    readonly status: 'ROUND_OVER' | 'MATCH_OVER';
+    readonly roundWinnerId: string;
+    readonly matchWinnerId: string | null;
+  } | null;
+}
+
+/**
+ * Evaluates the 25-card Mercy Rule in NO_MERCY mode for `victimIndex`.
+ * If the player holds >= 25 cards:
+ * - Eliminates the player from the round and places their hand underneath the discard pile
+ * - Awards +250 bonus points to `bonusRecipientIndex`
+ * - If only 1 non-eliminated player remains, ends the round (and match if targetScore reached)
+ */
+function evaluateMercyKnockout(
+  playersInput: readonly PlayerState[],
+  discardPileInput: readonly Card[],
+  victimIndex: number,
+  bonusRecipientIndex: number,
+  houseRules: HouseRules,
+  roundNumber: number,
+  targetScore: number,
+  seed: string
+): MercyEvaluationResult {
+  const players = playersInput.slice();
+  let discardPile = discardPileInput.slice();
+  const events: GameEvent[] = [];
+
+  if (houseRules.gameMode !== 'NO_MERCY') {
+    return {
+      players,
+      discardPile,
+      events,
+      wasEliminated: false,
+      roundEndedState: null,
+    };
+  }
+
+  const victim = players[victimIndex];
+  if (!victim || victim.eliminated || victim.hand.length < MERCY_CARD_LIMIT) {
+    return {
+      players,
+      discardPile,
+      events,
+      wasEliminated: false,
+      roundEndedState: null,
+    };
+  }
+
+  const knockedOutCardCount = victim.hand.length;
+  // Place eliminated player's cards underneath the discard pile so topDiscard stays intact
+  discardPile = [...victim.hand, ...discardPile];
+
+  const validBonusIndex =
+    bonusRecipientIndex !== victimIndex &&
+    players[bonusRecipientIndex] &&
+    !players[bonusRecipientIndex]!.eliminated
+      ? bonusRecipientIndex
+      : players.findIndex((p, idx) => idx !== victimIndex && !p.eliminated);
+
+  const bonusRecipientId =
+    validBonusIndex !== -1 ? players[validBonusIndex]!.id : null;
+
+  const updatedPlayers = players.map((p, idx) => {
+    if (idx === victimIndex) {
+      return {
+        ...p,
+        hand: [],
+        calledUno: false,
+        preCalledUno: false,
+        eliminated: true,
+      };
+    }
+    if (idx === validBonusIndex) {
+      return {
+        ...p,
+        score: p.score + KNOCKOUT_BONUS_POINTS,
+      };
+    }
+    return p;
+  });
+
+  events.push({
+    type: 'PLAYER_ELIMINATED',
+    playerId: victim.id,
+    cardCount: knockedOutCardCount,
+    bonusAwardedToId: bonusRecipientId,
+    bonusPoints: bonusRecipientId ? KNOCKOUT_BONUS_POINTS : 0,
+  });
+
+  const activeSurvivors = updatedPlayers.filter((p) => !p.eliminated);
+  if (activeSurvivors.length === 1) {
+    const survivor = activeSurvivors[0]!;
+    const survivorIdx = updatedPlayers.findIndex((p) => p.id === survivor.id);
+    let pointsEarned = 0;
+    for (let i = 0; i < updatedPlayers.length; i++) {
+      if (i !== survivorIdx) {
+        pointsEarned += calculateHandPoints(updatedPlayers[i]!.hand);
+      }
+    }
+    const newSurvivorScore = survivor.score + pointsEarned;
+    const finalPlayers = updatedPlayers.map((p, idx) =>
+      idx === survivorIdx ? { ...p, score: newSurvivorScore } : p
+    );
+
+    events.push({
+      type: 'ROUND_ENDED',
+      roundNumber,
+      winnerId: survivor.id,
+      pointsEarned,
+      newScore: newSurvivorScore,
+    });
+
+    // Check if any player reached targetScore (either survivor or knockout bonus recipient)
+    let highestScorer = finalPlayers[0]!;
+    for (const p of finalPlayers) {
+      if (p.score > highestScorer.score) {
+        highestScorer = p;
+      }
+    }
+    const isMatchOver = highestScorer.score >= targetScore;
+    const matchWinnerId = isMatchOver ? highestScorer.id : null;
+
+    if (isMatchOver) {
+      const finalScores: Record<string, number> = {};
+      for (const p of finalPlayers) {
+        finalScores[p.id] = p.score;
+      }
+      events.push({
+        type: 'MATCH_ENDED',
+        winnerId: highestScorer.id,
+        finalScores,
+        seed,
+      });
+    }
+
+    return {
+      players: finalPlayers,
+      discardPile,
+      events,
+      wasEliminated: true,
+      roundEndedState: {
+        status: isMatchOver ? 'MATCH_OVER' : 'ROUND_OVER',
+        roundWinnerId: survivor.id,
+        matchWinnerId,
+      },
+    };
+  }
+
+  return {
+    players: updatedPlayers,
+    discardPile,
+    events,
+    wasEliminated: true,
+    roundEndedState: null,
+  };
+}
+
 interface DealRoundOutput {
   readonly players: PlayerState[];
   readonly drawPile: Card[];
@@ -108,21 +292,18 @@ interface DealRoundOutput {
 }
 
 /**
- * Deals a fresh 108-card round and applies all first-card flip rules:
- * - Wild Draw Four: return to deck, reshuffle, and reflip
- * - Wild: first player (seat 0) picks color (AWAITING_INITIAL_WILD_COLOR)
- * - Skip: first player (seat 0) is skipped -> seat 1 acts
- * - Draw Two: first player (seat 0) draws 2 cards and is skipped -> seat 1 acts
- * - Reverse: flips direction to -1; with 2 players acts as Skip (seat 1 acts),
- *   with 3+ players moves to seat N-1.
+ * Deals a fresh round (108 cards in CLASSIC mode, 168 cards in NO_MERCY mode)
+ * and applies all first-card flip rules.
  */
 function dealRound(
   basePlayers: readonly Pick<PlayerState, 'id' | 'name' | 'score' | 'connected'>[],
   initialHandSize: number,
   roundNumber: number,
-  prngStateInput: PrngState
+  prngStateInput: PrngState,
+  gameMode: GameMode = 'CLASSIC'
 ): DealRoundOutput {
-  const fullDeck = createStandardDeck();
+  const fullDeck =
+    gameMode === 'NO_MERCY' ? createNoMercyDeck() : createStandardDeck();
   const initialShuffle = fisherYatesShuffle(fullDeck, prngStateInput);
   let drawPile = initialShuffle.shuffled;
   let prngState = initialShuffle.prngState;
@@ -138,9 +319,9 @@ function dealRound(
     }
   }
 
-  // Flip first card; if WILD_DRAW_FOUR, return to drawPile, reshuffle, and reflip
+  // Flip first card; if any penalty Wild (or Roulette), return to drawPile, reshuffle, and reflip
   let firstCard = drawPile.shift()!;
-  while (firstCard.kind === 'WILD_DRAW_FOUR') {
+  while (firstCard.color === 'WILD' && firstCard.kind !== 'WILD') {
     drawPile.push(firstCard);
     const reshuffled = fisherYatesShuffle(drawPile, prngState);
     drawPile = reshuffled.shuffled;
@@ -164,6 +345,7 @@ function dealRound(
     calledUno: false,
     preCalledUno: false,
     connected: p.connected,
+    eliminated: false,
   }));
 
   const playerCount = players.length;
@@ -180,9 +362,13 @@ function dealRound(
       reason: 'INITIAL_FLIP',
     });
     currentPlayerIndex = getNextPlayerIndex(0, direction, playerCount, 1);
-  } else if (firstCard.kind === 'DRAW_TWO') {
+  } else if (firstCard.kind === 'SKIP_ALL') {
+    // Skip Everyone on initial flip skips all other players so seat 0 acts
+    currentPlayerIndex = 0;
+  } else if (firstCard.kind === 'DRAW_TWO' || firstCard.kind === 'DRAW_FOUR') {
+    const penaltyCount = firstCard.kind === 'DRAW_FOUR' ? 4 : 2;
     const firstPlayer = players[0]!;
-    const drawRes = drawFromDeck(drawPile, discardPile, prngState, 2);
+    const drawRes = drawFromDeck(drawPile, discardPile, prngState, penaltyCount);
     drawPile = drawRes.drawPile;
     discardPile = drawRes.discardPile;
     prngState = drawRes.prngState;
@@ -250,7 +436,8 @@ function dealRound(
 export function createGame(config: GameConfig): GameState {
   const maxPlayers = config.maxPlayers ?? 10;
   const initialHandSize = config.initialHandSize ?? 7;
-  const targetScore = config.targetScore ?? 500;
+  const isNoMercy = config.houseRules?.gameMode === 'NO_MERCY';
+  const targetScore = config.targetScore ?? (isNoMercy ? 1000 : 500);
 
   if (!config.matchId || config.matchId.trim().length === 0) {
     throw new Error('matchId is required');
@@ -264,7 +451,7 @@ export function createGame(config: GameConfig): GameState {
     );
   }
   if (initialHandSize < 1 || initialHandSize * config.players.length >= 100) {
-    throw new Error('Invalid initialHandSize for 108-card deck');
+    throw new Error('Invalid initialHandSize for deck');
   }
 
   const seenIds = new Set<string>();
@@ -278,9 +465,11 @@ export function createGame(config: GameConfig): GameState {
     seenIds.add(p.id);
   }
 
+  const baseDefaults = isNoMercy ? NO_MERCY_HOUSE_RULES : DEFAULT_HOUSE_RULES;
   const houseRules: HouseRules = {
-    ...DEFAULT_HOUSE_RULES,
+    ...baseDefaults,
     ...config.houseRules,
+    gameMode: isNoMercy ? 'NO_MERCY' : 'CLASSIC',
   };
 
   const initialPrngState = createPrngState(config.seed);
@@ -291,7 +480,13 @@ export function createGame(config: GameConfig): GameState {
     connected: true,
   }));
 
-  const dealt = dealRound(basePlayers, initialHandSize, 1, initialPrngState);
+  const dealt = dealRound(
+    basePlayers,
+    initialHandSize,
+    1,
+    initialPrngState,
+    houseRules.gameMode ?? 'CLASSIC'
+  );
 
   const lastSeqByPlayer: Record<string, number> = {};
   for (const p of config.players) {
@@ -361,7 +556,8 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
       state.players,
       state.initialHandSize,
       nextRoundNumber,
-      state.prngState
+      state.prngState,
+      state.houseRules.gameMode ?? 'CLASSIC'
     );
 
     return {
@@ -398,7 +594,9 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
   }
 
   const actingPlayer = state.players[playerIndex]!;
-  const playerCount = state.players.length;
+  if (actingPlayer.eliminated) {
+    return fail('NOT_YOUR_TURN', 'You have been knocked out of this round by the Mercy Rule');
+  }
 
   // 1. Handle CALL_UNO
   if (action.type === 'CALL_UNO') {
@@ -463,7 +661,11 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
 
     const vulnerableIndex = state.players.findIndex((p) => p.id === vulnerableId);
     const vulnerablePlayer = state.players[vulnerableIndex]!;
-    if (vulnerablePlayer.calledUno || vulnerablePlayer.hand.length !== 1) {
+    if (
+      vulnerablePlayer.eliminated ||
+      vulnerablePlayer.calledUno ||
+      vulnerablePlayer.hand.length !== 1
+    ) {
       return fail('INVALID_CATCH', 'Target player is not vulnerable to UNO penalty');
     }
 
@@ -543,6 +745,151 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
     };
   }
 
+  // 3b. Handle CHOOSE_ROULETTE_COLOR (after previous player played WILD_COLOR_ROULETTE)
+  if (action.type === 'CHOOSE_ROULETTE_COLOR') {
+    if (state.turnPhase !== 'AWAITING_ROULETTE_COLOR') {
+      return fail(
+        'INVALID_PHASE_ACTION',
+        'CHOOSE_ROULETTE_COLOR is only valid when awaiting a Color Roulette choice'
+      );
+    }
+    if (playerIndex !== state.currentPlayerIndex) {
+      return fail('NOT_YOUR_TURN', 'Only the targeted player may choose the Roulette color');
+    }
+    if (!isValidColoredSuit(action.color)) {
+      return fail('MISSING_WILD_COLOR', 'Must specify a valid color (RED, YELLOW, GREEN, BLUE)');
+    }
+
+    let drawPile = state.drawPile.slice();
+    let discardPile = state.discardPile.slice();
+    let prngState = state.prngState;
+    const flippedCards: Card[] = [];
+    const events: GameEvent[] = [];
+
+    // Flip cards one by one until a card matching the chosen colored suit is revealed (Wilds do not stop the flip)
+    let guard = 0;
+    while (guard < 200) {
+      guard++;
+      const stepRes = drawFromDeck(drawPile, discardPile, prngState, 1);
+      drawPile = stepRes.drawPile;
+      discardPile = stepRes.discardPile;
+      prngState = stepRes.prngState;
+      events.push(...stepRes.reshuffleEvents);
+
+      const card = stepRes.drawn[0];
+      if (!card) {
+        break;
+      }
+      flippedCards.push(card);
+      if (card.color === action.color) {
+        break;
+      }
+    }
+
+    const updatedPlayersAfterFlip = state.players.map((p, idx) =>
+      idx === playerIndex
+        ? {
+            ...p,
+            hand: [...p.hand, ...flippedCards],
+            calledUno: false,
+            preCalledUno: false,
+          }
+        : p
+    );
+
+    events.push({
+      type: 'COLOR_ROULETTE_RESOLVED',
+      playerId: action.playerId,
+      chosenColor: action.color,
+      drawnCount: flippedCards.length,
+    });
+    if (flippedCards.length > 0) {
+      events.push({
+        type: 'CARDS_DRAWN',
+        playerId: action.playerId,
+        count: flippedCards.length,
+        reason: 'COLOR_ROULETTE',
+      });
+    }
+    events.push({
+      type: 'TURN_SKIPPED',
+      skippedPlayerId: action.playerId,
+      reason: 'DRAW_PENALTY',
+    });
+
+    const attackerIndex = getNextActivePlayerIndex(
+      state.players,
+      playerIndex,
+      (state.direction * -1) as PlayDirection,
+      1
+    );
+
+    const mercyRes = evaluateMercyKnockout(
+      updatedPlayersAfterFlip,
+      discardPile,
+      playerIndex,
+      attackerIndex,
+      state.houseRules,
+      state.roundNumber,
+      state.targetScore,
+      state.seed
+    );
+    events.push(...mercyRes.events);
+
+    if (mercyRes.roundEndedState) {
+      return {
+        ok: true,
+        state: {
+          ...state,
+          prngState,
+          status: mercyRes.roundEndedState.status,
+          players: mercyRes.players,
+          turnPhase: 'PLAY_OR_DRAW',
+          drawPile,
+          discardPile: mercyRes.discardPile,
+          currentColor: action.color,
+          pendingDrawnCardId: null,
+          pendingDrawCount: 0,
+          pendingDrawKind: null,
+          unoVulnerablePlayerId: null,
+          wd4ChallengeState: null,
+          lastSeqByPlayer: updatedSeqMap,
+          roundWinnerId: mercyRes.roundEndedState.roundWinnerId,
+          matchWinnerId: mercyRes.roundEndedState.matchWinnerId,
+        },
+        events,
+      };
+    }
+
+    const nextPlayerIndex = getNextActivePlayerIndex(
+      mercyRes.players,
+      playerIndex,
+      state.direction,
+      1
+    );
+
+    return {
+      ok: true,
+      state: {
+        ...state,
+        prngState,
+        players: mercyRes.players,
+        currentPlayerIndex: nextPlayerIndex,
+        turnPhase: 'PLAY_OR_DRAW',
+        drawPile,
+        discardPile: mercyRes.discardPile,
+        currentColor: action.color,
+        pendingDrawnCardId: null,
+        pendingDrawCount: 0,
+        pendingDrawKind: null,
+        unoVulnerablePlayerId: null,
+        wd4ChallengeState: null,
+        lastSeqByPlayer: updatedSeqMap,
+      },
+      events,
+    };
+  }
+
   // 4. Handle CHOOSE_SWAP_TARGET (7-0 house rule after playing a 7)
   if (action.type === 'CHOOSE_SWAP_TARGET') {
     if (state.turnPhase !== 'AWAITING_SWAP_TARGET') {
@@ -558,8 +905,8 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
       return fail('INVALID_SWAP_TARGET', 'Cannot swap hands with yourself');
     }
     const targetIndex = state.players.findIndex((p) => p.id === action.targetPlayerId);
-    if (targetIndex === -1) {
-      return fail('INVALID_SWAP_TARGET', `Target player "${action.targetPlayerId}" not found`);
+    if (targetIndex === -1 || state.players[targetIndex]!.eliminated) {
+      return fail('INVALID_SWAP_TARGET', `Target player "${action.targetPlayerId}" is not available`);
     }
 
     const sourcePlayer = state.players[playerIndex]!;
@@ -598,10 +945,10 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
       nextUnoVulnerable = updatedPlayers[targetIndex]!.id;
     }
 
-    const nextPlayerIndex = getNextPlayerIndex(
+    const nextPlayerIndex = getNextActivePlayerIndex(
+      updatedPlayers,
       state.currentPlayerIndex,
       state.direction,
-      playerCount,
       1
     );
 
@@ -671,10 +1018,10 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         reason: 'DRAW_PENALTY',
       });
 
-      const nextPlayerIndex = getNextPlayerIndex(
+      const nextPlayerIndex = getNextActivePlayerIndex(
+        updatedPlayers,
         state.currentPlayerIndex,
         state.direction,
-        playerCount,
         1
       );
 
@@ -782,10 +1129,10 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         reason: 'DRAW_PENALTY',
       });
 
-      const nextPlayerIndex = getNextPlayerIndex(
+      const nextPlayerIndex = getNextActivePlayerIndex(
+        updatedPlayers,
         state.currentPlayerIndex,
         state.direction,
-        playerCount,
         1
       );
 
@@ -823,8 +1170,7 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
     // If stacking penalty is active, player draws the accumulated stack and loses turn
     if (state.turnPhase === 'STACK_OR_DRAW' && state.pendingDrawCount > 0) {
       const penaltyCount = state.pendingDrawCount;
-      const drawReason =
-        state.pendingDrawKind === 'WILD_DRAW_FOUR' ? 'WILD_DRAW_FOUR' : 'DRAW_TWO';
+      const drawReason = state.pendingDrawKind ?? 'DRAW_TWO';
       const drawRes = drawFromDeck(
         state.drawPile,
         state.discardPile,
@@ -832,7 +1178,7 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         penaltyCount
       );
 
-      const updatedPlayers = state.players.map((p, idx) =>
+      const updatedPlayersAfterDraw = state.players.map((p, idx) =>
         idx === playerIndex
           ? {
               ...p,
@@ -843,10 +1189,67 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
           : p
       );
 
-      const nextPlayerIndex = getNextPlayerIndex(
+      const events: GameEvent[] = [
+        ...drawRes.reshuffleEvents,
+        {
+          type: 'CARDS_DRAWN',
+          playerId: action.playerId,
+          count: drawRes.drawn.length,
+          reason: drawReason,
+        },
+        {
+          type: 'TURN_SKIPPED',
+          skippedPlayerId: action.playerId,
+          reason: 'DRAW_PENALTY',
+        },
+      ];
+
+      const attackerIndex = getNextActivePlayerIndex(
+        state.players,
+        playerIndex,
+        (state.direction * -1) as PlayDirection,
+        1
+      );
+
+      const mercyRes = evaluateMercyKnockout(
+        updatedPlayersAfterDraw,
+        drawRes.discardPile,
+        playerIndex,
+        attackerIndex,
+        state.houseRules,
+        state.roundNumber,
+        state.targetScore,
+        state.seed
+      );
+      events.push(...mercyRes.events);
+
+      if (mercyRes.roundEndedState) {
+        return {
+          ok: true,
+          state: {
+            ...state,
+            prngState: drawRes.prngState,
+            status: mercyRes.roundEndedState.status,
+            drawPile: drawRes.drawPile,
+            discardPile: mercyRes.discardPile,
+            players: mercyRes.players,
+            turnPhase: 'PLAY_OR_DRAW',
+            pendingDrawnCardId: null,
+            pendingDrawCount: 0,
+            pendingDrawKind: null,
+            unoVulnerablePlayerId: null,
+            lastSeqByPlayer: updatedSeqMap,
+            roundWinnerId: mercyRes.roundEndedState.roundWinnerId,
+            matchWinnerId: mercyRes.roundEndedState.matchWinnerId,
+          },
+          events,
+        };
+      }
+
+      const nextPlayerIndex = getNextActivePlayerIndex(
+        mercyRes.players,
         state.currentPlayerIndex,
         state.direction,
-        playerCount,
         1
       );
 
@@ -856,8 +1259,8 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
           ...state,
           prngState: drawRes.prngState,
           drawPile: drawRes.drawPile,
-          discardPile: drawRes.discardPile,
-          players: updatedPlayers,
+          discardPile: mercyRes.discardPile,
+          players: mercyRes.players,
           currentPlayerIndex: nextPlayerIndex,
           turnPhase: 'PLAY_OR_DRAW',
           pendingDrawnCardId: null,
@@ -866,24 +1269,156 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
           unoVulnerablePlayerId: null,
           lastSeqByPlayer: updatedSeqMap,
         },
-        events: [
-          ...drawRes.reshuffleEvents,
-          {
-            type: 'CARDS_DRAWN',
-            playerId: action.playerId,
-            count: drawRes.drawn.length,
-            reason: drawReason,
-          },
-          {
-            type: 'TURN_SKIPPED',
-            skippedPlayerId: action.playerId,
-            reason: 'DRAW_PENALTY',
-          },
-        ],
+        events,
       };
     }
 
-    // Standard 1-card turn draw: draw 1; may play it if legal, else pass
+    // In NO_MERCY mode, normal turn draw uses Draw-Until-Playable (up to the 25-card Mercy limit)
+    if (state.houseRules.gameMode === 'NO_MERCY') {
+      const topCard = state.discardPile[state.discardPile.length - 1]!;
+      let drawPile = state.drawPile.slice();
+      let discardPile = state.discardPile.slice();
+      let prngState = state.prngState;
+      let currentHand = actingPlayer.hand.slice();
+      const drawnCards: Card[] = [];
+      const events: GameEvent[] = [];
+      let playableCard: Card | null = null;
+
+      let guard = 0;
+      while (guard < 100 && currentHand.length < MERCY_CARD_LIMIT) {
+        guard++;
+        const stepRes = drawFromDeck(drawPile, discardPile, prngState, 1);
+        drawPile = stepRes.drawPile;
+        discardPile = stepRes.discardPile;
+        prngState = stepRes.prngState;
+        events.push(...stepRes.reshuffleEvents);
+
+        const nextCard = stepRes.drawn[0];
+        if (!nextCard) {
+          break;
+        }
+        drawnCards.push(nextCard);
+        currentHand = [...currentHand, nextCard];
+
+        if (
+          isPlayable(nextCard, {
+            topCard,
+            currentColor: state.currentColor,
+            hand: currentHand,
+            houseRules: state.houseRules,
+            turnPhase: 'PLAY_OR_DRAW',
+            pendingDrawnCardId: null,
+            pendingDrawCount: 0,
+            pendingDrawKind: null,
+          })
+        ) {
+          playableCard = nextCard;
+          break;
+        }
+      }
+
+      const updatedPlayersAfterDraw = state.players.map((p, idx) =>
+        idx === playerIndex
+          ? {
+              ...p,
+              hand: currentHand,
+              calledUno: false,
+              preCalledUno: false,
+            }
+          : p
+      );
+
+      events.push({
+        type: 'CARDS_DRAWN',
+        playerId: action.playerId,
+        count: drawnCards.length,
+        reason: 'TURN_DRAW',
+      });
+
+      // Check if Draw-Until-Playable pushed the player to 25+ cards (Mercy Knockout!)
+      const previousActiveIndex = getNextActivePlayerIndex(
+        state.players,
+        playerIndex,
+        (state.direction * -1) as PlayDirection,
+        1
+      );
+      const mercyRes = evaluateMercyKnockout(
+        updatedPlayersAfterDraw,
+        discardPile,
+        playerIndex,
+        previousActiveIndex,
+        state.houseRules,
+        state.roundNumber,
+        state.targetScore,
+        state.seed
+      );
+      events.push(...mercyRes.events);
+
+      if (mercyRes.roundEndedState) {
+        return {
+          ok: true,
+          state: {
+            ...state,
+            prngState,
+            status: mercyRes.roundEndedState.status,
+            drawPile,
+            discardPile: mercyRes.discardPile,
+            players: mercyRes.players,
+            turnPhase: 'PLAY_OR_DRAW',
+            pendingDrawnCardId: null,
+            unoVulnerablePlayerId: null,
+            lastSeqByPlayer: updatedSeqMap,
+            roundWinnerId: mercyRes.roundEndedState.roundWinnerId,
+            matchWinnerId: mercyRes.roundEndedState.matchWinnerId,
+          },
+          events,
+        };
+      }
+
+      if (mercyRes.wasEliminated) {
+        const nextPlayerIndex = getNextActivePlayerIndex(
+          mercyRes.players,
+          playerIndex,
+          state.direction,
+          1
+        );
+        return {
+          ok: true,
+          state: {
+            ...state,
+            prngState,
+            drawPile,
+            discardPile: mercyRes.discardPile,
+            players: mercyRes.players,
+            currentPlayerIndex: nextPlayerIndex,
+            turnPhase: 'PLAY_OR_DRAW',
+            pendingDrawnCardId: null,
+            unoVulnerablePlayerId: null,
+            lastSeqByPlayer: updatedSeqMap,
+          },
+          events,
+        };
+      }
+
+      const lastDrawn = drawnCards[drawnCards.length - 1] ?? null;
+      return {
+        ok: true,
+        state: {
+          ...state,
+          prngState,
+          drawPile,
+          discardPile,
+          players: updatedPlayersAfterDraw,
+          turnPhase: 'DRAWN_PLAY_OR_PASS',
+          pendingDrawnCardId: playableCard ? playableCard.id : lastDrawn ? lastDrawn.id : null,
+          unoVulnerablePlayerId: null,
+          lastSeqByPlayer: updatedSeqMap,
+        },
+        events,
+      };
+    }
+
+    // Standard Classic 1-card turn draw: draw 1; may play it if legal, else pass
     const drawRes = drawFromDeck(state.drawPile, state.discardPile, state.prngState, 1);
     const drawnCard = drawRes.drawn[0] ?? null;
 
@@ -936,10 +1471,10 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
       );
     }
 
-    const nextPlayerIndex = getNextPlayerIndex(
+    const nextPlayerIndex = getNextActivePlayerIndex(
+      state.players,
       state.currentPlayerIndex,
       state.direction,
-      playerCount,
       1
     );
 
@@ -1003,21 +1538,24 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
     }
 
     // Validate Wild color selection
-    if (cardInHand.kind === 'WILD' || cardInHand.kind === 'WILD_DRAW_FOUR') {
+    if (requiresWildColorChoice(cardInHand.kind)) {
       if (!isValidColoredSuit(action.chosenColor)) {
         return fail(
           'MISSING_WILD_COLOR',
           'Playing a Wild card requires choosing RED, YELLOW, GREEN, or BLUE'
         );
       }
-    } else if (action.chosenColor !== undefined) {
+    } else if (
+      cardInHand.kind !== 'WILD_COLOR_ROULETTE' &&
+      action.chosenColor !== undefined
+    ) {
       return fail(
         'UNEXPECTED_WILD_COLOR',
         'chosenColor may only be specified when playing a Wild card'
       );
     }
 
-    // Specific check for Wild Draw Four restriction when challenge rule is OFF
+    // Specific check for Wild Draw Four restriction when challenge rule is OFF in CLASSIC mode
     const hadCardOfPreviousColor = hasCardOfCurrentColor(
       actingPlayer.hand,
       state.currentColor,
@@ -1026,6 +1564,7 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
 
     if (
       cardInHand.kind === 'WILD_DRAW_FOUR' &&
+      state.houseRules.gameMode !== 'NO_MERCY' &&
       !state.houseRules.wildDrawFourChallenge &&
       state.turnPhase !== 'STACK_OR_DRAW' &&
       hadCardOfPreviousColor
@@ -1055,9 +1594,13 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
       );
     }
 
-    const remainingHand = actingPlayer.hand.filter((c) => c.id !== cardInHand.id);
-    const nextColor: ColoredCardColor =
-      cardInHand.color === 'WILD' ? action.chosenColor! : cardInHand.color;
+    let remainingHand = actingPlayer.hand.filter((c) => c.id !== cardInHand.id);
+    const nextColor: ColoredCardColor | null =
+      cardInHand.kind === 'WILD_COLOR_ROULETTE'
+        ? state.currentColor
+        : cardInHand.color === 'WILD'
+        ? action.chosenColor!
+        : cardInHand.color;
     let nextDiscardPile: Card[] = [...state.discardPile, cardInHand];
     let nextDrawPile: Card[] = state.drawPile.slice();
     let nextPrngState = state.prngState;
@@ -1066,10 +1609,33 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         type: 'CARD_PLAYED',
         playerId: action.playerId,
         card: cardInHand,
-        chosenColor: cardInHand.color === 'WILD' ? action.chosenColor! : null,
+        chosenColor:
+          cardInHand.color === 'WILD' && cardInHand.kind !== 'WILD_COLOR_ROULETTE'
+            ? action.chosenColor!
+            : null,
         jumpedIn,
       },
     ];
+
+    // If DISCARD_ALL is played, sweep all other cards of the same color from the player's hand onto the discard pile
+    if (cardInHand.kind === 'DISCARD_ALL') {
+      const sameColorCards = remainingHand.filter((c) => c.color === cardInHand.color);
+      if (sameColorCards.length > 0) {
+        remainingHand = remainingHand.filter((c) => c.color !== cardInHand.color);
+        // Keep cardInHand as the top discard so the active card kind remains DISCARD_ALL
+        nextDiscardPile = [
+          ...state.discardPile,
+          ...sameColorCards,
+          cardInHand,
+        ];
+      }
+      events.push({
+        type: 'DISCARD_ALL_PLAYED',
+        playerId: action.playerId,
+        color: cardInHand.color,
+        count: 1 + sameColorCards.length,
+      });
+    }
 
     // Evaluate UNO state for the acting player
     let playerCalledUno = false;
@@ -1100,8 +1666,6 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
 
     // Check if the player emptied their hand to win the round
     if (remainingHand.length === 0) {
-      // If the winning card is a Draw Two or Wild Draw Four (or closes an active stack),
-      // opponent hands are scored for the round winner.
       let pointsEarned = 0;
       for (let i = 0; i < updatedPlayers.length; i++) {
         if (i !== playerIndex) {
@@ -1162,22 +1726,34 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
     }
 
     // Resolve card effects when round continues
+    const activePlayerCount = updatedPlayers.filter((p) => !p.eliminated).length;
     let nextDirection: PlayDirection = state.direction;
-    let nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 1);
+    let nextPlayerIndex = getNextActivePlayerIndex(
+      updatedPlayers,
+      playerIndex,
+      nextDirection,
+      1
+    );
     let nextTurnPhase: TurnPhase = 'PLAY_OR_DRAW';
     let nextPendingDrawCount = state.pendingDrawCount;
-    let nextPendingDrawKind = state.pendingDrawKind;
+    let nextPendingDrawKind: DrawPenaltyKind | null = state.pendingDrawKind;
     let nextWd4ChallengeState = null;
 
     if (cardInHand.kind === 'NUMBER') {
       if (state.houseRules.sevenZeroSwap && cardInHand.value === 0) {
-        // Rotate all hands in the direction of play
+        // Rotate all active hands in the direction of play
         const previousHands = updatedPlayers.map((p) => ({
           hand: p.hand,
           calledUno: p.calledUno,
         }));
         updatedPlayers = updatedPlayers.map((p, idx) => {
-          const sourceIdx = getNextPlayerIndex(idx, (nextDirection * -1) as PlayDirection, playerCount, 1);
+          if (p.eliminated) return p;
+          const sourceIdx = getNextActivePlayerIndex(
+            updatedPlayers,
+            idx,
+            (nextDirection * -1) as PlayDirection,
+            1
+          );
           const donated = previousHands[sourceIdx]!;
           return {
             ...p,
@@ -1185,9 +1761,8 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
             calledUno: donated.hand.length === 1 ? donated.calledUno : false,
           };
         });
-        // Update UNO vulnerability if the acting player's rotated hand changed
         const rotatedVulnerable = updatedPlayers.find(
-          (p) => p.hand.length === 1 && !p.calledUno
+          (p) => !p.eliminated && p.hand.length === 1 && !p.calledUno
         );
         nextUnoVulnerableId = rotatedVulnerable ? rotatedVulnerable.id : null;
         events.push({
@@ -1207,16 +1782,35 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         skippedPlayerId: skippedPlayer.id,
         reason: 'SKIP_CARD',
       });
-      nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 2);
+      nextPlayerIndex = getNextActivePlayerIndex(
+        updatedPlayers,
+        playerIndex,
+        nextDirection,
+        2
+      );
+    } else if (cardInHand.kind === 'SKIP_ALL') {
+      // Skip Everyone skips all opponents and grants the acting player another immediate turn
+      const skippedPlayer = updatedPlayers[nextPlayerIndex]!;
+      events.push({
+        type: 'TURN_SKIPPED',
+        skippedPlayerId: skippedPlayer.id,
+        reason: 'SKIP_ALL',
+      });
+      nextPlayerIndex = playerIndex;
     } else if (cardInHand.kind === 'REVERSE') {
       nextDirection = nextDirection === 1 ? -1 : 1;
       events.push({
         type: 'DIRECTION_REVERSED',
         direction: nextDirection,
       });
-      if (playerCount === 2) {
-        // Reverse acts as Skip with 2 players
-        const opponentIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 1);
+      if (activePlayerCount === 2) {
+        // Reverse acts as Skip with 2 active players
+        const opponentIndex = getNextActivePlayerIndex(
+          updatedPlayers,
+          playerIndex,
+          nextDirection,
+          1
+        );
         events.push({
           type: 'TURN_SKIPPED',
           skippedPlayerId: updatedPlayers[opponentIndex]!.id,
@@ -1224,50 +1818,59 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         });
         nextPlayerIndex = playerIndex;
       } else {
-        nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 1);
-      }
-    } else if (cardInHand.kind === 'DRAW_TWO') {
-      if (state.houseRules.stacking) {
-        nextPendingDrawCount += 2;
-        nextPendingDrawKind = 'DRAW_TWO';
-        nextTurnPhase = 'STACK_OR_DRAW';
-        nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 1);
-      } else {
-        const victimIndex = nextPlayerIndex;
-        const victim = updatedPlayers[victimIndex]!;
-        const drawRes = drawFromDeck(nextDrawPile, nextDiscardPile, nextPrngState, 2);
-        nextDrawPile = drawRes.drawPile;
-        nextDiscardPile = drawRes.discardPile;
-        nextPrngState = drawRes.prngState;
-        events.push(...drawRes.reshuffleEvents);
-
-        updatedPlayers = updatedPlayers.map((p, idx) =>
-          idx === victimIndex
-            ? {
-                ...p,
-                hand: [...p.hand, ...drawRes.drawn],
-                calledUno: false,
-                preCalledUno: false,
-              }
-            : p
+        nextPlayerIndex = getNextActivePlayerIndex(
+          updatedPlayers,
+          playerIndex,
+          nextDirection,
+          1
         );
-
-        events.push({
-          type: 'CARDS_DRAWN',
-          playerId: victim.id,
-          count: drawRes.drawn.length,
-          reason: 'DRAW_TWO',
-        });
-        events.push({
-          type: 'TURN_SKIPPED',
-          skippedPlayerId: victim.id,
-          reason: 'DRAW_PENALTY',
-        });
-        nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 2);
       }
-    } else if (cardInHand.kind === 'WILD_DRAW_FOUR') {
-      if (state.houseRules.wildDrawFourChallenge && state.pendingDrawCount === 0) {
-        const challengerIndex = nextPlayerIndex;
+    } else if (cardInHand.kind === 'WILD_COLOR_ROULETTE') {
+      // Next active player must pick a color and flip until they reveal that color
+      nextPlayerIndex = getNextActivePlayerIndex(
+        updatedPlayers,
+        playerIndex,
+        nextDirection,
+        1
+      );
+      nextTurnPhase = 'AWAITING_ROULETTE_COLOR';
+    } else if (
+      cardInHand.kind === 'DRAW_TWO' ||
+      cardInHand.kind === 'DRAW_FOUR' ||
+      cardInHand.kind === 'WILD_DRAW_FOUR' ||
+      cardInHand.kind === 'WILD_REVERSE_DRAW_FOUR' ||
+      cardInHand.kind === 'WILD_DRAW_SIX' ||
+      cardInHand.kind === 'WILD_DRAW_TEN'
+    ) {
+      if (cardInHand.kind === 'WILD_REVERSE_DRAW_FOUR') {
+        nextDirection = nextDirection === 1 ? -1 : 1;
+        events.push({
+          type: 'DIRECTION_REVERSED',
+          direction: nextDirection,
+        });
+      }
+
+      const penaltyDelta =
+        cardInHand.kind === 'DRAW_TWO'
+          ? 2
+          : cardInHand.kind === 'WILD_DRAW_SIX'
+          ? 6
+          : cardInHand.kind === 'WILD_DRAW_TEN'
+          ? 10
+          : 4;
+
+      if (
+        cardInHand.kind === 'WILD_DRAW_FOUR' &&
+        state.houseRules.wildDrawFourChallenge &&
+        state.houseRules.gameMode !== 'NO_MERCY' &&
+        state.pendingDrawCount === 0
+      ) {
+        const challengerIndex = getNextActivePlayerIndex(
+          updatedPlayers,
+          playerIndex,
+          nextDirection,
+          1
+        );
         const challenger = updatedPlayers[challengerIndex]!;
         nextWd4ChallengeState = {
           blufferPlayerId: action.playerId,
@@ -1278,14 +1881,29 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
         nextPlayerIndex = challengerIndex;
         nextTurnPhase = 'AWAITING_WD4_CHALLENGE';
       } else if (state.houseRules.stacking) {
-        nextPendingDrawCount += 4;
-        nextPendingDrawKind = 'WILD_DRAW_FOUR';
+        nextPendingDrawCount += penaltyDelta;
+        nextPendingDrawKind = cardInHand.kind;
         nextTurnPhase = 'STACK_OR_DRAW';
-        nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 1);
+        nextPlayerIndex = getNextActivePlayerIndex(
+          updatedPlayers,
+          playerIndex,
+          nextDirection,
+          1
+        );
       } else {
-        const victimIndex = nextPlayerIndex;
+        const victimIndex = getNextActivePlayerIndex(
+          updatedPlayers,
+          playerIndex,
+          nextDirection,
+          1
+        );
         const victim = updatedPlayers[victimIndex]!;
-        const drawRes = drawFromDeck(nextDrawPile, nextDiscardPile, nextPrngState, 4);
+        const drawRes = drawFromDeck(
+          nextDrawPile,
+          nextDiscardPile,
+          nextPrngState,
+          penaltyDelta
+        );
         nextDrawPile = drawRes.drawPile;
         nextDiscardPile = drawRes.discardPile;
         nextPrngState = drawRes.prngState;
@@ -1306,14 +1924,61 @@ export function reduce(state: GameState, action: GameAction): EngineResult {
           type: 'CARDS_DRAWN',
           playerId: victim.id,
           count: drawRes.drawn.length,
-          reason: 'WILD_DRAW_FOUR',
+          reason: cardInHand.kind,
         });
         events.push({
           type: 'TURN_SKIPPED',
           skippedPlayerId: victim.id,
           reason: 'DRAW_PENALTY',
         });
-        nextPlayerIndex = getNextPlayerIndex(playerIndex, nextDirection, playerCount, 2);
+
+        const mercyRes = evaluateMercyKnockout(
+          updatedPlayers,
+          nextDiscardPile,
+          victimIndex,
+          playerIndex,
+          state.houseRules,
+          state.roundNumber,
+          state.targetScore,
+          state.seed
+        );
+        updatedPlayers = mercyRes.players;
+        nextDiscardPile = mercyRes.discardPile;
+        events.push(...mercyRes.events);
+
+        if (mercyRes.roundEndedState) {
+          return {
+            ok: true,
+            state: {
+              ...state,
+              prngState: nextPrngState,
+              status: mercyRes.roundEndedState.status,
+              players: updatedPlayers,
+              currentPlayerIndex: playerIndex,
+              direction: nextDirection,
+              turnPhase: 'PLAY_OR_DRAW',
+              drawPile: nextDrawPile,
+              discardPile: nextDiscardPile,
+              currentColor: nextColor,
+              pendingDrawnCardId: null,
+              pendingDrawCount: 0,
+              pendingDrawKind: null,
+              unoVulnerablePlayerId: null,
+              wd4ChallengeState: null,
+              lastSeqByPlayer: updatedSeqMap,
+              roundWinnerId: mercyRes.roundEndedState.roundWinnerId,
+              matchWinnerId: mercyRes.roundEndedState.matchWinnerId,
+            },
+            events,
+          };
+        }
+
+        nextPlayerIndex = getNextActivePlayerIndex(
+          updatedPlayers,
+          victimIndex,
+          nextDirection,
+          1
+        );
       }
     }
 

@@ -15,6 +15,8 @@ import {
   MessageSquare,
   Eye,
   Film,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   isExactJumpInMatch,
@@ -37,7 +39,6 @@ import {
   WildColorPickerModal,
   type PendingWildSelection,
 } from './table-modals';
-import { PWAInstallButton } from './pwa-install-button';
 
 export interface CompanionSeatInfo {
   readonly playerId: string;
@@ -93,6 +94,20 @@ export function CardTableView({
 }: CardTableViewProps) {
   const [pendingWildCard, setPendingWildCard] = useState<Card | null>(null);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  const handScrollRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollHand = (direction: 'left' | 'right') => {
+    if (handScrollRef.current) {
+      const scrollAmount = direction === 'left' ? -280 : 280;
+      handScrollRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+  };
+
+  const handleHandWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (handScrollRef.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      handScrollRef.current.scrollLeft += e.deltaY;
+    }
+  };
 
   React.useEffect(() => {
     const deadline = turnDeadlineAt ?? room.turnDeadlineAt ?? null;
@@ -126,8 +141,10 @@ export function CardTableView({
     view.turnPhase === 'PLAY_OR_DRAW' &&
     view.pendingDrawCount === 0;
 
+  const isNoMercy = view.houseRules.gameMode === 'NO_MERCY';
+
   const checkCardPlayable = (card: Card): boolean => {
-    if (isSpectator) return false;
+    if (isSpectator || view.eliminated) return false;
     if (view.status !== 'IN_PROGRESS') return false;
     if (isMyTurn) {
       return isPlayable(card, {
@@ -137,6 +154,7 @@ export function CardTableView({
         houseRules: view.houseRules,
         turnPhase: view.turnPhase,
         pendingDrawCount: view.pendingDrawCount,
+        pendingDrawKind: view.pendingDrawKind,
         pendingDrawnCardId: view.pendingDrawnCardId,
       });
     }
@@ -152,31 +170,45 @@ export function CardTableView({
 
   const canDrawNow =
     !isSpectator &&
+    !view.eliminated &&
     isMyTurn &&
     view.status === 'IN_PROGRESS' &&
     (view.turnPhase === 'PLAY_OR_DRAW' || view.turnPhase === 'STACK_OR_DRAW');
 
   const canPassNow =
     !isSpectator &&
+    !view.eliminated &&
     isMyTurn &&
     view.status === 'IN_PROGRESS' &&
     view.turnPhase === 'DRAWN_PLAY_OR_PASS';
 
   const canCallUnoNow =
     !isSpectator &&
+    !view.eliminated &&
     view.status === 'IN_PROGRESS' &&
     (view.hand.length === 2 || view.hand.length === 1);
 
   // Catch Uno opponents vulnerable
   const vulnerableOpponents = isSpectator
     ? []
-    : view.opponents.filter((o) => o.id === view.unoVulnerablePlayerId);
+    : view.opponents.filter((o) => o.id === view.unoVulnerablePlayerId && !o.eliminated);
+
+  const willLeaveOneCardAfterPlay = (card: Card): boolean => {
+    if (card.kind === 'DISCARD_ALL') {
+      const remaining = view.hand.filter(
+        (c) => c.id !== card.id && c.color !== card.color
+      );
+      return remaining.length === 1;
+    }
+    return view.hand.length === 2;
+  };
 
   const handleCardClick = (card: Card) => {
-    if (isSpectator) return;
+    if (isSpectator || view.eliminated) return;
     if (!playableCardIds.has(card.id)) return;
 
-    if (card.color === 'WILD') {
+    // WILD_COLOR_ROULETTE does not ask the attacker for a color; the next player chooses!
+    if (card.color === 'WILD' && card.kind !== 'WILD_COLOR_ROULETTE') {
       setPendingWildCard(card);
       return;
     }
@@ -184,7 +216,7 @@ export function CardTableView({
     onDispatchAction({
       type: 'PLAY_CARD',
       cardId: card.id,
-      callUno: view.hand.length === 2,
+      callUno: willLeaveOneCardAfterPlay(card),
     });
   };
 
@@ -196,14 +228,21 @@ export function CardTableView({
       });
       return;
     }
+    if (view.turnPhase === 'AWAITING_ROULETTE_COLOR' && isMyTurn) {
+      onDispatchAction({
+        type: 'CHOOSE_ROULETTE_COLOR',
+        color,
+      });
+      return;
+    }
     if (pendingWildCard) {
-      const cardId = pendingWildCard.id;
+      const card = pendingWildCard;
       setPendingWildCard(null);
       onDispatchAction({
         type: 'PLAY_CARD',
-        cardId,
+        cardId: card.id,
         chosenColor: color,
-        callUno: view.hand.length === 2,
+        callUno: willLeaveOneCardAfterPlay(card),
       });
     }
   };
@@ -212,7 +251,8 @@ export function CardTableView({
 
   // Format active house rules as unboxed text with · separators
   const enabledRulesList: string[] = [];
-  if (view.houseRules.stacking) enabledRulesList.push('Stacking');
+  if (isNoMercy) enabledRulesList.push('NO MERCY (25-Card KO)');
+  if (view.houseRules.stacking) enabledRulesList.push(isNoMercy ? 'Progressive Stack' : 'Stacking');
   if (view.houseRules.sevenZeroSwap) enabledRulesList.push('7-0 Swap');
   if (view.houseRules.jumpIn) enabledRulesList.push('Jump-In');
   if (view.houseRules.wildDrawFourChallenge) enabledRulesList.push('+4 Challenge');
@@ -234,9 +274,13 @@ export function CardTableView({
                 ? 'bg-amber-400'
                 : view.topDiscard.color === 'GREEN'
                   ? 'bg-emerald-500'
-                  : view.topDiscard.kind === 'WILD_DRAW_FOUR'
-                    ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-orange-500'
-                    : 'bg-indigo-500'
+                  : view.topDiscard.kind === 'WILD_DRAW_TEN' ||
+                      view.topDiscard.kind === 'WILD_DRAW_SIX'
+                    ? 'bg-gradient-to-r from-rose-600 via-amber-500 to-red-700'
+                    : view.topDiscard.kind === 'WILD_DRAW_FOUR' ||
+                        view.topDiscard.kind === 'WILD_REVERSE_DRAW_FOUR'
+                      ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-orange-500'
+                      : 'bg-indigo-500'
         }`}
       />
 
@@ -246,6 +290,11 @@ export function CardTableView({
           <span className="text-base sm:text-lg font-bold tracking-tight text-stone-100 whitespace-nowrap">
             CardClash
           </span>
+          {isNoMercy && (
+            <span className="px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/40 text-rose-300 font-mono text-[10px] font-extrabold uppercase tracking-wider">
+              NO MERCY
+            </span>
+          )}
           <div className="hidden sm:flex items-center gap-2 text-xs text-stone-300 font-mono tabular-nums">
             <span>Room {room.roomCode}</span>
             <span aria-hidden="true">·</span>
@@ -255,7 +304,7 @@ export function CardTableView({
             {enabledRulesList.length > 0 && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="text-emerald-300">
+                <span className={isNoMercy ? 'text-rose-300 font-semibold' : 'text-emerald-300'}>
                   {enabledRulesList.join(' / ')}
                 </span>
               </>
@@ -323,8 +372,6 @@ export function CardTableView({
             </button>
           )}
 
-          <PWAInstallButton />
-
           <button
             type="button"
             onClick={onToggleSound}
@@ -353,7 +400,7 @@ export function CardTableView({
       {view.opponents.length === 1 ? (
         (() => {
           const opp = view.opponents[0]!;
-          const isOppTurn = opp.id === view.currentPlayerId;
+          const isOppTurn = opp.id === view.currentPlayerId && !opp.eliminated;
           const visibleCount = Math.min(opp.cardCount, 14);
           const extraCount = Math.max(0, opp.cardCount - visibleCount);
           const angleStep = visibleCount > 10 ? 1.8 : visibleCount > 7 ? 2.4 : 3;
@@ -371,14 +418,21 @@ export function CardTableView({
                 <div className="flex items-center gap-2">
                   <div
                     className={`px-3 py-1 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all ${
-                      isOppTurn
-                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md shadow-amber-500/10'
-                        : 'bg-slate-900/70 border-white/10 text-stone-200'
+                      opp.eliminated
+                        ? 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                        : isOppTurn
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md shadow-amber-500/10'
+                          : 'bg-slate-900/70 border-white/10 text-stone-200'
                     }`}
                   >
                     <span className="truncate max-w-[140px] sm:max-w-[200px]">
                       {opp.name}
                     </span>
+                    {opp.eliminated && (
+                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-600 text-white font-black">
+                        KNOCKED OUT (25+)
+                      </span>
+                    )}
                     {isOppTurn && (
                       <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-black">
                         Thinking
@@ -389,7 +443,7 @@ export function CardTableView({
                         OFFLINE
                       </span>
                     )}
-                    {opp.calledUno && (
+                    {opp.calledUno && !opp.eliminated && (
                       <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 animate-bounce">
                         UNO!
                       </span>
@@ -398,7 +452,19 @@ export function CardTableView({
                 </div>
 
                 <div className="flex items-center gap-2 text-xs text-stone-300 font-mono tabular-nums">
-                  <span>Opponent Hand: {opp.cardCount} cards</span>
+                  <span
+                    className={
+                      isNoMercy && opp.cardCount >= 20
+                        ? 'text-rose-400 font-bold'
+                        : ''
+                    }
+                  >
+                    Opponent Hand: {opp.cardCount}
+                    {isNoMercy ? '/25 cards' : ' cards'}
+                    {isNoMercy && opp.cardCount >= 20 && !opp.eliminated
+                      ? ' · DANGER'
+                      : ''}
+                  </span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-300 font-semibold">{opp.score} pts</span>
                 </div>
@@ -437,7 +503,7 @@ export function CardTableView({
       ) : (
         <section className="w-full px-3 pt-2.5 pb-1 flex items-start justify-center gap-3 sm:gap-6 flex-wrap">
           {view.opponents.map((opp) => {
-            const isOppTurn = opp.id === view.currentPlayerId;
+            const isOppTurn = opp.id === view.currentPlayerId && !opp.eliminated;
             const visibleCount = Math.min(opp.cardCount, 8);
             const extraCount = Math.max(0, opp.cardCount - visibleCount);
             const angleStep = visibleCount > 5 ? 3.2 : 4.2;
@@ -448,9 +514,11 @@ export function CardTableView({
               <div
                 key={opp.id}
                 className={`flex flex-col items-center px-3.5 pt-2 pb-2.5 rounded-2xl border transition-all min-w-[148px] sm:min-w-[172px] ${
-                  isOppTurn
-                    ? 'bg-amber-500/15 border-amber-400/70 shadow-lg shadow-amber-500/10 scale-[1.03]'
-                    : 'bg-slate-950/65 border-white/10'
+                  opp.eliminated
+                    ? 'bg-rose-950/40 border-rose-500/30 opacity-60'
+                    : isOppTurn
+                      ? 'bg-amber-500/15 border-amber-400/70 shadow-lg shadow-amber-500/10 scale-[1.03]'
+                      : 'bg-slate-950/65 border-white/10'
                 }`}
               >
                 {/* Opponent Info Header */}
@@ -459,12 +527,17 @@ export function CardTableView({
                     <span className="text-xs font-bold text-stone-100 truncate max-w-[96px] sm:max-w-[120px]">
                       {opp.name}
                     </span>
+                    {opp.eliminated && (
+                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-600 text-white">
+                        KO
+                      </span>
+                    )}
                     {!opp.connected && (
                       <span className="text-[9px] px-1 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono">
                         OFF
                       </span>
                     )}
-                    {opp.calledUno && (
+                    {opp.calledUno && !opp.eliminated && (
                       <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 animate-bounce">
                         UNO!
                       </span>
@@ -477,33 +550,51 @@ export function CardTableView({
 
                 {/* Compact Curved Fanned Card-Back Deck */}
                 <div className="relative flex items-center justify-center h-14 sm:h-16 w-full overflow-visible my-0.5">
-                  <div className={`flex ${overlapClass} items-center justify-center`}>
-                    {Array.from({ length: visibleCount }).map((_, idx) => {
-                      const offset = idx - (visibleCount - 1) / 2;
-                      const deg = offset * -angleStep;
-                      const archY = Math.abs(offset) * -1.2;
-                      return (
-                        <div
-                          key={`opp-${opp.id}-card-${idx}`}
-                          style={{
-                            transform: `translateY(${archY}px) rotate(${deg}deg) scale(0.54)`,
-                          }}
-                          className="origin-center -my-6 transition-transform duration-150 drop-shadow-sm"
-                        >
-                          <CardBackGraphic />
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {extraCount > 0 && (
-                    <span className="absolute -right-1 bottom-0 px-1.5 py-0.5 rounded-full bg-slate-950/90 border border-amber-400/40 text-amber-300 font-mono text-[10px] font-bold">
-                      +{extraCount}
+                  {opp.eliminated ? (
+                    <span className="text-[10px] font-mono font-bold text-rose-300 uppercase tracking-wider">
+                      Knocked Out (25+)
                     </span>
+                  ) : (
+                    <>
+                      <div className={`flex ${overlapClass} items-center justify-center`}>
+                        {Array.from({ length: visibleCount }).map((_, idx) => {
+                          const offset = idx - (visibleCount - 1) / 2;
+                          const deg = offset * -angleStep;
+                          const archY = Math.abs(offset) * -1.2;
+                          return (
+                            <div
+                              key={`opp-${opp.id}-card-${idx}`}
+                              style={{
+                                transform: `translateY(${archY}px) rotate(${deg}deg) scale(0.54)`,
+                              }}
+                              className="origin-center -my-6 transition-transform duration-150 drop-shadow-sm"
+                            >
+                              <CardBackGraphic />
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {extraCount > 0 && (
+                        <span className="absolute -right-1 bottom-0 px-1.5 py-0.5 rounded-full bg-slate-950/90 border border-amber-400/40 text-amber-300 font-mono text-[10px] font-bold">
+                          +{extraCount}
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
 
-                <div className="text-[10px] text-stone-300 font-mono tabular-nums mt-0.5">
-                  {opp.cardCount} {opp.cardCount === 1 ? 'card' : 'cards'}
+                <div
+                  className={`text-[10px] font-mono tabular-nums mt-0.5 ${
+                    isNoMercy && opp.cardCount >= 20 && !opp.eliminated
+                      ? 'text-rose-400 font-bold'
+                      : 'text-stone-300'
+                  }`}
+                >
+                  {opp.eliminated
+                    ? 'Eliminated'
+                    : isNoMercy
+                      ? `${opp.cardCount}/25 cards${opp.cardCount >= 20 ? ' · DANGER' : ''}`
+                      : `${opp.cardCount} ${opp.cardCount === 1 ? 'card' : 'cards'}`}
                 </div>
               </div>
             );
@@ -598,7 +689,13 @@ export function CardTableView({
               </div>
             </motion.button>
             <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider">
-              {canDrawNow ? 'Tap to Draw' : 'Draw Deck'}
+              {canDrawNow
+                ? view.pendingDrawCount > 0
+                  ? `Draw +${view.pendingDrawCount}`
+                  : isNoMercy
+                    ? 'Draw Until Playable'
+                    : 'Tap to Draw'
+                : 'Draw Deck'}
             </span>
           </div>
 
@@ -633,7 +730,12 @@ export function CardTableView({
         {view.pendingDrawCount > 0 && (
           <div className="mt-4 px-4 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2 animate-bounce">
             <AlertTriangle className="w-4 h-4" />
-            <span>+{view.pendingDrawCount} Draw Penalty Active! Play matching +2/+4 or draw.</span>
+            <span>
+              +{view.pendingDrawCount} Draw Stack Active!{' '}
+              {isNoMercy
+                ? 'Play equal or higher Draw card (+2/+4/+6/+10) or draw stack.'
+                : 'Play matching +2/+4 or draw.'}
+            </span>
           </div>
         )}
 
@@ -660,6 +762,10 @@ export function CardTableView({
             {isSpectator ? (
               <span className="text-xs text-cyan-300 font-medium">
                 Spectator View • Watch live moves unfold deterministically
+              </span>
+            ) : view.eliminated ? (
+              <span className="px-3 py-1 rounded-lg bg-rose-600/20 border border-rose-500/40 text-xs text-rose-300 font-bold">
+                KNOCKED OUT (25+ Cards Mercy Rule) • Watching remaining players finish round
               </span>
             ) : (
               <>
@@ -696,63 +802,125 @@ export function CardTableView({
             )}
           </div>
 
-          <div className="text-xs text-stone-400 font-mono tabular-nums">
+          <div
+            className={`text-xs font-mono tabular-nums ${
+              isNoMercy && view.hand.length >= 20
+                ? 'text-rose-400 font-bold'
+                : 'text-stone-400'
+            }`}
+          >
             {isSpectator
               ? `${spectatorCount} Spectators in room`
-              : `Your Hand: ${view.hand.length} cards`}
+              : view.eliminated
+                ? 'Eliminated (25+ Cards)'
+                : isNoMercy
+                  ? `Your Hand: ${view.hand.length}/25 cards${
+                      view.hand.length >= 20 ? ' · MERCY DANGER!' : ''
+                    }`
+                  : `Your Hand: ${view.hand.length} cards`}
           </div>
         </div>
 
-        {/* Fanned Player Hand Container */}
-        <div className="w-full overflow-x-auto pb-1 flex items-center justify-center">
+        {/* Fanned Player Hand Container with Side Navigation & Generous Edge Padding */}
+        <div className="relative w-full group/hand">
+          {/* Left Scroll Navigation Button */}
+          {view.hand.length > 6 && (
+            <button
+              type="button"
+              aria-label="Scroll hand left"
+              onClick={() => scrollHand('left')}
+              className="absolute left-1 sm:left-2 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-2.5 rounded-full bg-slate-950/90 hover:bg-slate-900 border border-white/20 text-stone-200 shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer opacity-80 group-hover/hand:opacity-100"
+            >
+              <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
+            </button>
+          )}
+
+          {/* Right Scroll Navigation Button */}
+          {view.hand.length > 6 && (
+            <button
+              type="button"
+              aria-label="Scroll hand right"
+              onClick={() => scrollHand('right')}
+              className="absolute right-1 sm:right-2 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-2.5 rounded-full bg-slate-950/90 hover:bg-slate-900 border border-white/20 text-stone-200 shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer opacity-80 group-hover/hand:opacity-100"
+            >
+              <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
+            </button>
+          )}
+
           <div
-            className={`flex ${
-              view.hand.length > 12
-                ? '-space-x-10 sm:-space-x-10'
-                : view.hand.length > 8
-                  ? '-space-x-8 sm:-space-x-9'
-                  : '-space-x-6 sm:-space-x-8'
-            } px-6 py-2 min-w-max`}
+            ref={handScrollRef}
+            onWheel={handleHandWheel}
+            className="w-full overflow-x-auto scroll-smooth overscroll-x-contain pb-2 pt-1 flex items-center justify-start sm:justify-center no-scrollbar"
           >
-            {view.hand.map((card, index) => {
-              const playable = playableCardIds.has(card.id);
-              const angleStep =
-                view.hand.length > 12 ? 1.5 : view.hand.length > 8 ? 2.2 : 3;
-              const rotationDeg = (index - (view.hand.length - 1) / 2) * angleStep;
-              return (
-                <motion.div
-                  key={card.id}
-                  whileHover={playable ? { y: -24, scale: 1.08, zIndex: 30 } : undefined}
-                  style={{ transform: `rotate(${rotationDeg}deg)` }}
-                  className={`transition-all duration-150 ${
-                    playable
-                      ? 'cursor-pointer'
-                      : 'opacity-50 grayscale-40 cursor-not-allowed'
-                  }`}
-                  onClick={() => handleCardClick(card)}
-                >
-                  <CardGraphic card={card} playable={playable} />
-                </motion.div>
-              );
-            })}
+            {/* Generous Leading Spacer */}
+            <div className="w-8 sm:w-16 shrink-0" aria-hidden="true" />
+
+            <div
+              className={`flex ${
+                view.hand.length > 16
+                  ? '-space-x-12 sm:-space-x-11'
+                  : view.hand.length > 12
+                    ? '-space-x-10 sm:-space-x-10'
+                    : view.hand.length > 8
+                      ? '-space-x-8 sm:-space-x-9'
+                      : '-space-x-6 sm:-space-x-7'
+              } px-4 py-2 min-w-max items-center`}
+            >
+              {view.hand.map((card, index) => {
+                const playable = playableCardIds.has(card.id);
+                const angleStep =
+                  view.hand.length > 16 ? 1.0 : view.hand.length > 12 ? 1.5 : view.hand.length > 8 ? 2.2 : 3;
+                const rotationDeg = (index - (view.hand.length - 1) / 2) * angleStep;
+                return (
+                  <motion.div
+                    key={card.id}
+                    whileHover={playable ? { y: -26, scale: 1.1, zIndex: 40 } : undefined}
+                    style={{ transform: `rotate(${rotationDeg}deg)` }}
+                    className={`transition-all duration-150 shrink-0 ${
+                      playable
+                        ? 'cursor-pointer'
+                        : 'opacity-50 grayscale-40 cursor-not-allowed'
+                    }`}
+                    onClick={() => handleCardClick(card)}
+                  >
+                    <CardGraphic card={card} playable={playable} />
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Generous Trailing Spacer to guarantee the last card is never clipped */}
+            <div className="w-12 sm:w-20 shrink-0" aria-hidden="true" />
           </div>
         </div>
       </footer>
 
       {/* Modals & Dialogs */}
       <WildColorPickerModal
-        open={Boolean(pendingWildCard) || view.turnPhase === 'AWAITING_INITIAL_WILD_COLOR'}
+        open={
+          Boolean(pendingWildCard) ||
+          (isMyTurn &&
+            (view.turnPhase === 'AWAITING_INITIAL_WILD_COLOR' ||
+              view.turnPhase === 'AWAITING_ROULETTE_COLOR'))
+        }
         title={
-          view.turnPhase === 'AWAITING_INITIAL_WILD_COLOR'
-            ? 'First Card is Wild: Select Initial Color'
-            : 'Wild Card Played: Choose Color'
+          view.turnPhase === 'AWAITING_ROULETTE_COLOR'
+            ? 'Wild Color Roulette: Choose Target Suit!'
+            : view.turnPhase === 'AWAITING_INITIAL_WILD_COLOR'
+              ? 'First Card is Wild: Select Initial Color'
+              : 'Wild Card Played: Choose Color'
+        }
+        subtitle={
+          view.turnPhase === 'AWAITING_ROULETTE_COLOR'
+            ? 'You will flip cards from the deck until a card of your chosen suit color appears!'
+            : 'Select the suit color and symbol to set as active'
         }
         onSelectColor={handleWildColorSelected}
-        onCancel={() => setPendingWildCard(null)}
+        onCancel={pendingWildCard ? () => setPendingWildCard(null) : undefined}
       />
 
       <SwapTargetModal
-        open={view.turnPhase === 'AWAITING_SWAP_TARGET'}
+        open={isMyTurn && view.turnPhase === 'AWAITING_SWAP_TARGET'}
         opponents={view.opponents}
         onSelectTarget={(targetPlayerId) =>
           onDispatchAction({
@@ -763,7 +931,7 @@ export function CardTableView({
       />
 
       <Wd4ChallengeModal
-        open={view.turnPhase === 'AWAITING_WD4_CHALLENGE'}
+        open={isMyTurn && view.turnPhase === 'AWAITING_WD4_CHALLENGE'}
         blufferName={
           view.opponents.find((o) => o.id === view.currentPlayerId)?.name ??
           'Opponent'

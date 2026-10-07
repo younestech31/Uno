@@ -129,21 +129,53 @@ export function CardGraphic({
       </div>
 
       {/* Center Ivory / Obsidian Emblem Medallion */}
-      <div className="relative z-10 my-auto mx-auto flex flex-col items-center justify-center w-11 h-14 sm:w-14 sm:h-18 rounded-xl bg-stone-50/95 text-slate-900 shadow-inner border border-black/10">
+      <div
+        className={`relative z-10 my-auto mx-auto flex flex-col items-center justify-center w-11 h-14 sm:w-14 sm:h-18 rounded-xl shadow-inner border ${
+          card.kind === 'WILD_DRAW_TEN' || card.kind === 'WILD_DRAW_SIX'
+            ? 'bg-slate-950 text-amber-300 border-amber-400/50'
+            : 'bg-stone-50/95 text-slate-900 border-black/10'
+        }`}
+      >
         {isWild ? (
           <div className="flex flex-col items-center justify-center gap-0.5">
-            <SuitGeometricSvg color="WILD" className="w-6 h-6 sm:w-7 sm:h-7" />
-            <span className="text-xs sm:text-sm font-extrabold font-mono text-slate-900 leading-none">
-              {card.kind === 'WILD_DRAW_FOUR' ? '+4' : 'WILD'}
+            <SuitGeometricSvg color="WILD" className="w-5 h-5 sm:w-6 sm:h-6" />
+            <span
+              className={`text-[11px] sm:text-xs font-extrabold font-mono leading-none ${
+                card.kind === 'WILD_DRAW_TEN'
+                  ? 'text-rose-400'
+                  : card.kind === 'WILD_DRAW_SIX'
+                    ? 'text-amber-300'
+                    : 'text-slate-900'
+              }`}
+            >
+              {card.kind === 'WILD_DRAW_FOUR'
+                ? '+4'
+                : card.kind === 'WILD_REVERSE_DRAW_FOUR'
+                  ? '⇄+4'
+                  : card.kind === 'WILD_DRAW_SIX'
+                    ? '+6'
+                    : card.kind === 'WILD_DRAW_TEN'
+                      ? '+10'
+                      : card.kind === 'WILD_COLOR_ROULETTE'
+                        ? 'SPIN'
+                        : 'WILD'}
             </span>
           </div>
         ) : (
           <div className={`flex flex-col items-center justify-center ${suit!.textClass}`}>
-            <span className="text-xl sm:text-2xl font-extrabold tracking-tight leading-none font-mono tabular-nums">
+            <span
+              className={`${
+                rank.length > 2 ? 'text-base sm:text-lg' : 'text-xl sm:text-2xl'
+              } font-extrabold tracking-tight leading-none font-mono tabular-nums`}
+            >
               {rank}
             </span>
-            <span className="text-[10px] sm:text-xs font-bold leading-none mt-0.5">
-              {suit!.symbol}
+            <span className="text-[9px] sm:text-[10px] font-bold leading-none mt-0.5 uppercase">
+              {card.kind === 'DISCARD_ALL'
+                ? 'ALL'
+                : card.kind === 'SKIP_ALL'
+                  ? 'ALL'
+                  : suit!.symbol}
             </span>
           </div>
         )}

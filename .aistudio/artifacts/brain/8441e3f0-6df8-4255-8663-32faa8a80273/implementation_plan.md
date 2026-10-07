@@ -1,97 +1,35 @@
-# Fix Room Exit & Serverless Synchronization Bugs
+# Implementation Plan: Card Hand Spacing & Balanced Bot AI with Difficulty Selector
 
-This plan resolves the issue where leaving a room—either in the lobby or mid-game on the deployed website—causes the interface to get stuck or bounce back into the active room due to stale serverless snapshot tokens and polling race conditions.
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> Both key behavioral preferences have been confirmed from your answers and are incorporated directly into this plan.
-
-- **Confirmed Decision 1 (Immediate Client Exit)**: Tapping **Leave Room** in a lobby or mid-game immediately exits to the home screen and clears all local room and session snapshot state without waiting on network round-trips.
-- **Confirmed Decision 2 (Server Room Cleanup)**: When a player leaves a room and no connected human players remain in that room (whether in the lobby or mid-game), the server immediately closes and deletes the room snapshot.
+## Problem Analysis
+1. **Hand Scrolling & Edge Clipping**: In `components/card-table-view.tsx`, the card container used `justify-center` on an `overflow-x-auto` flexbox, which in CSS standard creates an unreachable scroll coordinate space on the extreme left, and tight margins clip the extreme right cards when a player has 15–25 cards in hand.
+2. **Gameplay Difficulty & Perceived Scripting**: The bots were operating on deterministic, 100% aggressive heuristics (always punishing the leading human player with maximum stacked penalties and optimal card picks). Introducing human-like variance and a selectable **Bot Difficulty** (Casual, Balanced, Challenger) will make gameplay feel organic, random, and enjoyable.
 
 ---
 
-## 1. Overview & Core Concept
+## Proposed Changes
 
-- **What It Does**: Guarantees a clean, instantaneous exit to the home screen whenever a player leaves a lobby or an active match, while preventing background serverless polling (`room:sync`) or local companion bot teardown from re-hydrating the room.
-- **Target Audience / Persona**: Players on the deployed serverless website creating rooms, playing with local companion bots, or leaving mid-game to start a new match.
-- **Key Value**: Eliminates the stuck room loop on deployed environments and ensures abandoned rooms are immediately cleaned up on both client and server.
+### 1. Card Hand Container Spacing & Overflow Fix (`components/card-table-view.tsx`)
+- **Fix CSS Flexbox Overflow**: Replace `justify-center` with a start-aligned container when cards overflow, ensuring the scroll area can reach `scrollLeft = 0` and the extreme right without clipping.
+- **Generous Edge Padding**: Add `px-12 sm:px-16` padding and trailing spacer elements so the very first and very last cards have ample breathing room and are 100% visible.
+- **Left / Right Scroll Helper Controls**: Add subtle floating scroll chevrons on the left and right edges that appear when the hand overflows, enabling one-tap scrolling to the ends.
+- **Smooth Mousewheel & Touch Glide**: Support horizontal mousewheel scrolling and smooth CSS touch scrolling (`scroll-behavior: smooth`, `overscroll-behavior-x: contain`).
 
----
-
-## 2. User Experience & Visual Design
-
-- **Key User Flows**:
-  1. **Lobby Exit**: User clicks **Leave Room** in the lobby -> UI transitions immediately (`0ms` blocking delay) back to the Home view -> Local `sessionStorage` room keys and companion seat sockets are purged -> Server deletes the room if no human players remain.
-  2. **Mid-Game Exit**: User clicks **Leave** from the top HUD bar during an active match -> Polling stops immediately, local game views and turn timers reset, and the user lands cleanly on the Home screen ready to create or join a new room.
-- **Visual Identity & Theme**:
-  - Preserves the existing **Emerald Felt (`#0B2B26`)** table aesthetic, high-contrast stone typography, and responsive HUD bar controls.
-- **Interactive Feedback & Motion**:
-  - Instant view transition from the Lobby or Card Table back to the Home screen without frozen buttons or ghost toast notifications from the departed match.
+### 2. Balanced Bot AI with Difficulty Modes (`apps/server/src/bot.ts` & `components/cardclash-app.tsx`)
+- **Difficulty Modes**:
+  - **Casual (Friendly & Fun)**: Plays casually, occasionally holds back brutal penalties (+6/+10/Wilds), picks colors evenly or based on board state, and plays at a human-like pace.
+  - **Balanced (Default)**: Strategic but natural; prioritizes standard matches and plays specials when sensible, with randomized color distribution.
+  - **Challenger (Expert)**: High-level competitive strategy with aggressive penalty stacking and counter-plays.
+- **Difficulty Selector in UI**: Add a clean Bot Difficulty selector in the "Create Room" panel and lobby settings.
+- **True Entropy Shuffling**: Verify that every match and round seed uses fresh 256-bit cryptographic entropy via rejection-sampled Fisher-Yates shuffle.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## Verification Plan
 
-- **Decision 1: Optimistic Client State Reset + Synchronous SessionStorage Purge**
-  - *Chosen Approach*: Clear `room`, `viewsBySeat`, `turnDeadlineAt`, `lastActionText`, and `sessionStorage` keys (`cardclash_active_room` and `cardclash_snapshot_<roomCode>`) synchronously at the very start of the leave handler before firing background `room:leave` teardown requests.
-  - *Why*: In serverless mode, waiting for the `room:leave` HTTP callback before clearing state allows the 1.5-second `pollSync` interval and companion seat leave responses to re-save the room snapshot token and push the user back into the room.
-  - *Alternatives Considered*: Waiting for sequential RPC responses from each companion seat and primary player—rejected because network latency or serverless cold starts make the button feel unresponsive.
-- **Decision 2: Guarding `ServerlessFallbackSocket` Against Stale Leave Broadcasts**
-  - *Chosen Approach*: When `ServerlessFallbackSocket` processes a `room:leave` event, it immediately halts background sync for that room, removes stored snapshot tokens, and suppresses re-triggering `ROOM_STATE` on the leaving client.
-  - *Why*: Prevents race conditions where a leaving companion seat returns a non-null `room` payload that overwrites the primary player's cleared state.
-- **Decision 3: Server-Side Cleanup When No Connected Humans Remain**
-  - *Chosen Approach*: Update `RoomManager.leaveRoom` so that even during `IN_GAME` or `FINISHED` states, if no connected non-bot players remain after the player leaves (or if the host leaves a solo/companion match), the room snapshot and player-room mappings are deleted immediately.
-  - *Why*: Matches user expectations that leaving a solo/companion match or being the last human to leave closes the room rather than leaving a zombie match in memory.
+### Automated Tests
+- Run `npm run typecheck` across all packages to verify TypeScript types.
+- Run `npm run test` (vitest) to ensure all 34 existing test suites continue to pass.
 
----
-
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
-
-### Architecture & Leave Flow Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Client: CardClashApp                             │
-│  User clicks "Leave Room" (Lobby or Mid-Game HUD)                       │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 1. Immediate Local State & Storage Purge (Synchronous)                  │
-│  • Clear sessionStorage: cardclash_active_room & cardclash_snapshot_*   │
-│  • Disconnect & remove all companion seats without re-broadcasting      │
-│  • Reset React state: room = null, viewsBySeat = {}, deadline = null    │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 2. ServerlessFallbackSocket / Socket.IO Teardown                        │
-│  • Suppress ROOM_STATE re-hydration on ROOM_LEAVE response              │
-│  • Guard pollSync() so it aborts if active_room is null or leaving      │
-│  • Send room:leave RPC with roomCode & last snapshotToken               │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 3. Server: RoomManager.leaveRoom & /api/rpc                             │
-│  • Clear player -> room mapping in StateStore                           │
-│  • If status === LOBBY or no connected human players remain:            │
-│      -> Delete room snapshot & clear all remaining player mappings      │
-│      -> Return { room: null } (no snapshotToken re-issued)              │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Interactive Component & State Mapping
-
-- **Client Leave Handler**:
-  - Captures `currentRoomCode = room.roomCode` and primary/companion seat references.
-  - Immediately clears `window.sessionStorage.removeItem('cardclash_active_room')` and `window.sessionStorage.removeItem('cardclash_snapshot_' + currentRoomCode)`.
-  - Resets `setRoom(null)`, `setViewsBySeat({})`, `setTurnDeadlineAt(null)`, and `setLastActionText(null)` synchronously so the user returns to the Home screen right away.
-  - Disconnects companion sockets first so their polling loops stop, then emits `ROOM_LEAVE` to clean up server state.
-- **Serverless Transport Layer (`ServerlessFallbackSocket`)**:
-  - On `SOCKET_EVENTS.ROOM_LEAVE`, clears stored snapshot tokens prior to `fetch('/api/rpc')` and skips saving any returned `snapshotToken` or emitting `SOCKET_EVENTS.ROOM_STATE` / `cardclash_sync_broadcast` for the leaving player.
-  - In `pollSync()`, verifies before and after the `fetch('/api/rpc')` call that `cardclash_active_room` is still set to the polled `roomCode` so an in-flight poll that started right before clicking Leave cannot restore the room after the user has exited.
-- **Server Room Manager (`RoomManager.leaveRoom`)**:
-  - Checks remaining players after marking/removing the leaving player. If no remaining player has `connected === true && !isBot`, deletes the room snapshot via `deleteRoomSnapshot(roomCode)` and clears player-room bindings for all seats in that room.
+### Manual & Visual Verification
+- Deal 20–25 cards to a player's hand in No Mercy mode and verify that the first and last cards are fully visible and easy to slide/scroll to without clipping.
+- Test bot matches on Casual and Balanced difficulties to verify smooth, organic, and fair game flow.
