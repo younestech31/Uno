@@ -1,34 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Syne, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
-
-export const viewport: Viewport = {
-  themeColor: '#0B2B26',
-  colorScheme: 'dark',
-  width: 'device-width',
-  initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
-  viewportFit: 'cover',
-};
-
-const syne = Syne({
-  subsets: ['latin'],
-  weight: ['600', '700', '800'],
-  variable: '--font-display',
-});
-
-const plusJakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-sans',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['500', '700'],
-  variable: '--font-mono',
-});
 
 export const metadata: Metadata = {
   title: 'CardClash',
@@ -76,10 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="en"
-      className={`${syne.variable} ${plusJakarta.variable} ${jetbrainsMono.variable}`}
-    >
+    <html lang="en">
       <body className="font-sans antialiased bg-[#0B2B26] text-stone-100" suppressHydrationWarning>
         {children}
       </body>
